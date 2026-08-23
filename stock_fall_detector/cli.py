@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 from .context import ContextSource, StockContext
 from .detector import FallResult, find_falling_stocks
+from .qqq_components import QQQ_COMPONENTS
 from .yahoo_context_source import YahooStockTwitsContextSource
 from .yahoo_source import YahooHttpPriceDataSource
 
@@ -16,10 +17,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         description=(
             "Find large-cap stocks that fell sharply over a recent window. "
             "A stock qualifies if its market cap at the start of the window "
-            "exceeded --min-market-cap and it then dropped at least --fall-pct."
+            "exceeded --min-market-cap and it then dropped at least --fall-pct. "
+            "If no tickers are given, defaults to QQQ's holdings (Nasdaq-100)."
         )
     )
-    parser.add_argument("tickers", nargs="+", help="Stock ticker symbols, e.g. AAPL MSFT TSLA")
+    parser.add_argument(
+        "tickers", nargs="*",
+        help="Stock ticker symbols, e.g. AAPL MSFT TSLA (default: QQQ's holdings)",
+    )
     parser.add_argument(
         "--days", type=int, default=7, dest="days",
         help="Lookback window in calendar days (default: 7, i.e. one week)",
@@ -37,6 +42,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Skip fetching news/analyst/social context for qualifying stocks (faster)",
     )
     return parser.parse_args(argv)
+
+
+def resolve_tickers(tickers: Sequence[str]) -> list[str]:
+    return list(tickers) if tickers else list(QQQ_COMPONENTS)
 
 
 def format_summary_table(results: list[FallResult]) -> str:
@@ -91,9 +100,10 @@ def format_context_report(context: StockContext) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
+    tickers = resolve_tickers(args.tickers)
     source = YahooHttpPriceDataSource()
     results = find_falling_stocks(
-        tickers=args.tickers,
+        tickers=tickers,
         data_source=source,
         lookback_days=args.days,
         fall_threshold_pct=args.fall_pct,

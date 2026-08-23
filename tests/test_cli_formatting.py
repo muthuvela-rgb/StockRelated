@@ -1,6 +1,15 @@
-from stock_fall_detector.cli import format_context_report, format_summary_table
+from stock_fall_detector.cli import format_context_report, format_summary_table, resolve_tickers
 from stock_fall_detector.context import AnalystAction, AnalystSummary, NewsHeadline, SocialSentiment, StockContext
 from stock_fall_detector.detector import FallResult
+from stock_fall_detector.qqq_components import QQQ_COMPONENTS
+
+
+def test_resolve_tickers_returns_explicit_list_when_given():
+    assert resolve_tickers(["AAPL", "MSFT"]) == ["AAPL", "MSFT"]
+
+
+def test_resolve_tickers_defaults_to_qqq_components_when_empty():
+    assert resolve_tickers([]) == QQQ_COMPONENTS
 
 
 def test_format_summary_table_includes_all_results():

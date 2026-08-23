@@ -17,6 +17,17 @@ pip install -r requirements.txt
 python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA
 ```
 
+Tickers are optional. Run with none and it scans QQQ's holdings (the
+Nasdaq-100, ~100 tickers) instead:
+
+```bash
+python -m stock_fall_detector.cli
+```
+
+`stock_fall_detector/qqq_components.py` holds that list as a point-in-time
+snapshot — the index is periodically reconstituted, so it will drift out of
+date. Pass explicit tickers to bypass it, or edit that file to refresh it.
+
 ### Options
 
 | Flag | Default | Meaning |
