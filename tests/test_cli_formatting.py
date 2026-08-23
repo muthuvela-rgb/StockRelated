@@ -53,6 +53,59 @@ def test_format_summary_table_includes_all_results():
     assert "-12.00" in table
 
 
+def test_format_summary_table_includes_technicals_columns_when_provided():
+    results = [
+        FallResult(
+            ticker="INTC", start_price=102.50, end_price=90.07, pct_change=-12.13,
+            market_cap_before=541.83e9, start_date="2026-08-14", end_date="2026-08-21",
+        ),
+    ]
+    technicals_by_ticker = {
+        "INTC": Technicals(
+            ticker="INTC",
+            current_price=90.07,
+            rsi_14=39.6,
+            implied_volatility_pct=61.0,
+            bollinger=BollingerPosition(
+                sma=95.70, upper_band=107.95, lower_band=83.45, percent_b=0.27, zone="lower half"
+            ),
+            fifty_two_week_high=142.35,
+            fifty_two_week_low=23.68,
+            all_time_high=142.35,
+        )
+    }
+    table = format_summary_table(results, technicals_by_ticker)
+    assert "RSI" in table
+    assert "IV%" in table
+    assert "BB %B" in table
+    assert "vs52wkHi%" in table
+    assert "vsATH%" in table
+    assert "39.6" in table
+    assert "61.0" in table
+    assert "0.27" in table
+    assert "-36.7" in table  # 90.07 vs 142.35 both 52wk high and ATH
+
+
+def test_format_summary_table_technicals_row_handles_unavailable_data():
+    results = [
+        FallResult(ticker="ZZZZ", start_price=50.0, end_price=44.0, pct_change=-12.0, market_cap_before=15e9),
+    ]
+    technicals_by_ticker = {
+        "ZZZZ": Technicals(
+            ticker="ZZZZ",
+            current_price=None,
+            rsi_14=None,
+            implied_volatility_pct=None,
+            bollinger=None,
+            fifty_two_week_high=None,
+            fifty_two_week_low=None,
+            all_time_high=None,
+        )
+    }
+    table = format_summary_table(results, technicals_by_ticker)
+    assert "n/a" in table
+
+
 def test_format_context_report_with_full_data():
     context = StockContext(
         ticker="INTC",

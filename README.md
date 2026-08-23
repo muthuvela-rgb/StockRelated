@@ -46,14 +46,19 @@ python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA META --days 7 --fall-pct 1
 
 Output starts with a titled summary table — the title states the actual
 comparison window (start date to end date) so it's clear which prices are
-being compared:
+being compared. Unless `--no-technicals` is set, the table also includes
+RSI, implied volatility, Bollinger %B, and the current price's distance from
+its 52-week high and all-time high, so you can screen at a glance without
+reading the detail section below:
 
 ```
 Fall report: 2026-08-14 to 2026-08-21 (Current = last close)
-Ticker         Start     Current    Change %    Mkt Cap ($B)
-INTC          102.50       90.07      -12.13          541.83
-WMT           115.27      103.70      -10.04          917.33
+Ticker     Start  Current   Chg %  MktCap($B)    RSI    IV%   BB %B  vs52wkHi%   vsATH%
+INTC      102.50    90.07  -12.13      541.83   39.6   61.0    0.27      -36.7    -36.7
+WMT       115.27   103.70  -10.04      917.33   29.6   24.2   -0.16      -23.3    -23.3
 ```
+
+(With `--no-technicals`, the table falls back to just Ticker/Start/Current/Change %/Mkt Cap.)
 
 Rows are sorted worst-first (biggest drop at top); market cap shown is the
 cap *before* the fall (at the start price). For each qualifying stock, it

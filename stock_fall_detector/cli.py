@@ -54,7 +54,9 @@ def resolve_tickers(tickers: Sequence[str]) -> list[str]:
     return list(tickers) if tickers else list(QQQ_COMPONENTS)
 
 
-def format_summary_table(results: list[FallResult]) -> str:
+def format_summary_table(
+    results: list[FallResult], technicals_by_ticker: Optional[dict[str, Technicals]] = None
+) -> str:
     start_dates = [r.start_date for r in results if r.start_date]
     end_dates = [r.end_date for r in results if r.end_date]
     if start_dates and end_dates:
@@ -62,11 +64,38 @@ def format_summary_table(results: list[FallResult]) -> str:
     else:
         title = "Fall report"
 
-    lines = [title, f"{'Ticker':<8}{'Start':>12}{'Current':>12}{'Change %':>12}{'Mkt Cap ($B)':>16}"]
+    if not technicals_by_ticker:
+        lines = [title, f"{'Ticker':<8}{'Start':>12}{'Current':>12}{'Change %':>12}{'Mkt Cap ($B)':>16}"]
+        for r in results:
+            lines.append(
+                f"{r.ticker:<8}{r.start_price:>12.2f}{r.end_price:>12.2f}"
+                f"{r.pct_change:>12.2f}{r.market_cap_before / 1e9:>16.2f}"
+            )
+        return "\n".join(lines)
+
+    header = (
+        f"{'Ticker':<7}{'Start':>9}{'Current':>9}{'Chg %':>8}{'MktCap($B)':>12}"
+        f"{'RSI':>7}{'IV%':>7}{'BB %B':>8}{'vs52wkHi%':>11}{'vsATH%':>9}"
+    )
+    lines = [title, header]
     for r in results:
+        t = technicals_by_ticker.get(r.ticker)
+        rsi = f"{t.rsi_14:.1f}" if t and t.rsi_14 is not None else "n/a"
+        iv = f"{t.implied_volatility_pct:.1f}" if t and t.implied_volatility_pct is not None else "n/a"
+        bb = f"{t.bollinger.percent_b:.2f}" if t and t.bollinger is not None else "n/a"
+        vs_52wk_high = (
+            f"{(r.end_price - t.fifty_two_week_high) / t.fifty_two_week_high * 100:+.1f}"
+            if t and t.fifty_two_week_high
+            else "n/a"
+        )
+        vs_ath = (
+            f"{(r.end_price - t.all_time_high) / t.all_time_high * 100:+.1f}"
+            if t and t.all_time_high
+            else "n/a"
+        )
         lines.append(
-            f"{r.ticker:<8}{r.start_price:>12.2f}{r.end_price:>12.2f}"
-            f"{r.pct_change:>12.2f}{r.market_cap_before / 1e9:>16.2f}"
+            f"{r.ticker:<7}{r.start_price:>9.2f}{r.end_price:>9.2f}{r.pct_change:>8.2f}"
+            f"{r.market_cap_before / 1e9:>12.2f}{rsi:>7}{iv:>7}{bb:>8}{vs_52wk_high:>11}{vs_ath:>9}"
         )
     return "\n".join(lines)
 
@@ -169,21 +198,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("No qualifying stocks found.")
         return
 
-    print(format_summary_table(results))
+    technicals_by_ticker: dict[str, Technicals] = {}
+    if not args.no_technicals:
+        technicals_source: TechnicalsSource = YahooTechnicalsSource()
+        for r in results:
+            technicals_by_ticker[r.ticker] = technicals_source.get_technicals(r.ticker)
+
+    print(format_summary_table(results, technicals_by_ticker))
 
     if args.no_context and args.no_technicals:
         return
 
     context_source: ContextSource = YahooStockTwitsContextSource()
-    technicals_source: TechnicalsSource = YahooTechnicalsSource()
     for r in results:
         print(f"\n{r.ticker}:")
         if not args.no_context:
             context = context_source.get_context(r.ticker, current_price=r.end_price)
             print(format_context_report(context))
-        if not args.no_technicals:
-            technicals = technicals_source.get_technicals(r.ticker)
-            print(format_technicals_report(technicals))
+        if r.ticker in technicals_by_ticker:
+            print(format_technicals_report(technicals_by_ticker[r.ticker]))
 
 
 if __name__ == "__main__":
