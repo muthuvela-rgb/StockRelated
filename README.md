@@ -24,6 +24,7 @@ python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA
 | `--days` | `7` | Lookback window in calendar days |
 | `--fall-pct` | `10` | Minimum percentage drop to flag a stock |
 | `--min-market-cap` | `10000000000` ($10B) | Minimum market cap at the *start* of the window |
+| `--no-context` | off | Skip the news/analyst/social section below the summary table (faster) |
 
 ### Example
 
@@ -31,8 +32,22 @@ python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA
 python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA META --days 7 --fall-pct 10 --min-market-cap 10000000000
 ```
 
-Output lists each qualifying ticker with its start/end price, percentage
-change, and market cap (in $B) before the fall, sorted worst-first.
+Output starts with a summary table (ticker, start/end price, percentage
+change, and market cap in $B before the fall, sorted worst-first). For each
+qualifying stock, it then prints:
+
+- **Recent headlines** — up to 5 ticker-tagged news items from Yahoo Finance,
+  most recent first, as a starting point for *why* it may have fallen
+  (correlation, not a confirmed cause — read the articles)
+- **Analyst view** — consensus recommendation, mean analyst price target and
+  implied upside/downside vs. the current price, and the most recent
+  upgrade/downgrade actions, from Yahoo Finance
+- **Social sentiment** — bullish/bearish split from StockTwits' most recent
+  sentiment-tagged posts for the ticker
+
+Any of the three sections can come back empty (thin news coverage, no analyst
+coverage, no tagged StockTwits posts) — that's reported as "unavailable"
+rather than guessed at.
 
 ## How it works
 
@@ -49,8 +64,10 @@ A stock is reported if `market_cap_before` exceeds `--min-market-cap` **and**
 ## Tests
 
 The core detection logic (`stock_fall_detector.detector.find_falling_stocks`)
-is decoupled from the data source via a small `PriceDataSource` protocol, so
-tests run offline against fake data:
+is decoupled from the data source via a small `PriceDataSource` protocol, and
+the news/analyst/social report formatting (`stock_fall_detector.cli.format_context_report`)
+is decoupled from fetching via a `ContextSource` protocol, so tests run
+offline against fake data:
 
 ```bash
 pytest
