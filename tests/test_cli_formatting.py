@@ -1,7 +1,13 @@
-from stock_fall_detector.cli import format_context_report, format_summary_table, resolve_tickers
+from stock_fall_detector.cli import (
+    format_context_report,
+    format_summary_table,
+    format_technicals_report,
+    resolve_tickers,
+)
 from stock_fall_detector.context import AnalystAction, AnalystSummary, NewsHeadline, SocialSentiment, StockContext
 from stock_fall_detector.detector import FallResult
 from stock_fall_detector.qqq_components import QQQ_COMPONENTS
+from stock_fall_detector.technicals import BollingerPosition, Technicals
 
 
 def test_resolve_tickers_returns_explicit_list_when_given():
@@ -66,3 +72,43 @@ def test_format_context_report_handles_missing_data():
     assert "no recent ticker-tagged headlines found" in report
     assert "analyst data unavailable" in report
     assert "social sentiment unavailable" in report
+
+
+def test_format_technicals_report_with_full_data():
+    t = Technicals(
+        ticker="INTC",
+        current_price=90.07,
+        rsi_14=28.4,
+        implied_volatility_pct=62.1,
+        bollinger=BollingerPosition(
+            sma=98.32, upper_band=111.54, lower_band=85.10, percent_b=0.19, zone="lower half"
+        ),
+        fifty_two_week_high=142.35,
+        fifty_two_week_low=23.68,
+        all_time_high=142.35,
+    )
+    report = format_technicals_report(t)
+    assert "RSI(14): 28.4 (oversold)" in report
+    assert "62.1%" in report
+    assert "lower half" in report
+    assert "23.68 - $142.35" in report
+    assert "-36.7%" in report  # 90.07 vs 142.35 ATH
+
+
+def test_format_technicals_report_handles_missing_data():
+    t = Technicals(
+        ticker="ZZZZ",
+        current_price=None,
+        rsi_14=None,
+        implied_volatility_pct=None,
+        bollinger=None,
+        fifty_two_week_high=None,
+        fifty_two_week_low=None,
+        all_time_high=None,
+    )
+    report = format_technicals_report(t)
+    assert "RSI(14): unavailable" in report
+    assert "Implied volatility: unavailable" in report
+    assert "Bollinger Bands: unavailable" in report
+    assert "52-week range: unavailable" in report
+    assert "All-time high: unavailable" in report

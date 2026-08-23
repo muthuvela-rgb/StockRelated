@@ -36,6 +36,7 @@ date. Pass explicit tickers to bypass it, or edit that file to refresh it.
 | `--fall-pct` | `10` | Minimum percentage drop to flag a stock |
 | `--min-market-cap` | `10000000000` ($10B) | Minimum market cap at the *start* of the window |
 | `--no-context` | off | Skip the news/analyst/social section below the summary table (faster) |
+| `--no-technicals` | off | Skip the RSI/volatility/Bollinger/high-low section below the summary table (faster) |
 
 ### Example
 
@@ -55,9 +56,12 @@ qualifying stock, it then prints:
   upgrade/downgrade actions, from Yahoo Finance
 - **Social sentiment** — bullish/bearish split from StockTwits' most recent
   sentiment-tagged posts for the ticker
+- **Technicals** — RSI(14), ~30-day at-the-money implied volatility (from the
+  options chain), Bollinger Bands(20,2) position, 52-week high/low, and
+  all-time high with the current price's distance from it
 
-Any of the three sections can come back empty (thin news coverage, no analyst
-coverage, no tagged StockTwits posts) — that's reported as "unavailable"
+Any section can come back empty (thin news coverage, no analyst coverage, no
+tagged StockTwits posts, no options chain) — that's reported as "unavailable"
 rather than guessed at.
 
 ## How it works

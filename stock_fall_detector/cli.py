@@ -8,8 +8,10 @@ from typing import Optional, Sequence
 from .context import ContextSource, StockContext
 from .detector import FallResult, find_falling_stocks
 from .qqq_components import QQQ_COMPONENTS
+from .technicals import Technicals, TechnicalsSource
 from .yahoo_context_source import YahooStockTwitsContextSource
 from .yahoo_source import YahooHttpPriceDataSource
+from .yahoo_technicals_source import YahooTechnicalsSource
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -41,6 +43,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--no-context", action="store_true", dest="no_context",
         help="Skip fetching news/analyst/social context for qualifying stocks (faster)",
     )
+    parser.add_argument(
+        "--no-technicals", action="store_true", dest="no_technicals",
+        help="Skip fetching RSI/volatility/Bollinger/high-low data for qualifying stocks (faster)",
+    )
     return parser.parse_args(argv)
 
 
@@ -59,9 +65,7 @@ def format_summary_table(results: list[FallResult]) -> str:
 
 
 def format_context_report(context: StockContext) -> str:
-    lines = [f"\n{context.ticker}:"]
-
-    lines.append("  Recent headlines (why it may have fallen):")
+    lines = ["  Recent headlines (why it may have fallen):"]
     if context.headlines:
         for h in context.headlines:
             lines.append(f"    - [{h.published_at}] {h.title} ({h.publisher})")
@@ -98,6 +102,50 @@ def format_context_report(context: StockContext) -> str:
     return "\n".join(lines)
 
 
+def format_technicals_report(t: Technicals) -> str:
+    lines = ["  Technicals:"]
+
+    if t.rsi_14 is not None:
+        if t.rsi_14 < 30:
+            label = "oversold"
+        elif t.rsi_14 > 70:
+            label = "overbought"
+        else:
+            label = "neutral"
+        lines.append(f"    RSI(14): {t.rsi_14:.1f} ({label})")
+    else:
+        lines.append("    RSI(14): unavailable")
+
+    if t.implied_volatility_pct is not None:
+        lines.append(f"    Implied volatility (~30d ATM): {t.implied_volatility_pct:.1f}%")
+    else:
+        lines.append("    Implied volatility: unavailable")
+
+    b = t.bollinger
+    if b is not None:
+        lines.append(
+            f"    Bollinger Bands(20,2): SMA ${b.sma:.2f}, "
+            f"bands [${b.lower_band:.2f}, ${b.upper_band:.2f}] — {b.zone} (%B {b.percent_b:.2f})"
+        )
+    else:
+        lines.append("    Bollinger Bands: unavailable")
+
+    if t.fifty_two_week_high is not None and t.fifty_two_week_low is not None:
+        lines.append(f"    52-week range: ${t.fifty_two_week_low:.2f} - ${t.fifty_two_week_high:.2f}")
+    else:
+        lines.append("    52-week range: unavailable")
+
+    if t.all_time_high is not None:
+        off_ath = ""
+        if t.current_price:
+            off_ath = f" (current price is {(t.current_price - t.all_time_high) / t.all_time_high * 100:+.1f}% vs ATH)"
+        lines.append(f"    All-time high: ${t.all_time_high:.2f}{off_ath}")
+    else:
+        lines.append("    All-time high: unavailable")
+
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     tickers = resolve_tickers(args.tickers)
@@ -116,13 +164,19 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     print(format_summary_table(results))
 
-    if args.no_context:
+    if args.no_context and args.no_technicals:
         return
 
     context_source: ContextSource = YahooStockTwitsContextSource()
+    technicals_source: TechnicalsSource = YahooTechnicalsSource()
     for r in results:
-        context = context_source.get_context(r.ticker, current_price=r.end_price)
-        print(format_context_report(context))
+        print(f"\n{r.ticker}:")
+        if not args.no_context:
+            context = context_source.get_context(r.ticker, current_price=r.end_price)
+            print(format_context_report(context))
+        if not args.no_technicals:
+            technicals = technicals_source.get_technicals(r.ticker)
+            print(format_technicals_report(technicals))
 
 
 if __name__ == "__main__":
