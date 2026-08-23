@@ -14,6 +14,8 @@ class StockPriceData:
     start_price: float
     end_price: float
     shares_outstanding: float
+    start_date: str = ""  # YYYY-MM-DD, empty if unknown
+    end_date: str = ""  # YYYY-MM-DD; end_price is the close on this date
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,8 @@ class FallResult:
     end_price: float
     pct_change: float
     market_cap_before: float
+    start_date: str = ""
+    end_date: str = ""
 
 
 class PriceDataSource(Protocol):
@@ -60,6 +64,8 @@ def find_falling_stocks(
                     end_price=data.end_price,
                     pct_change=pct_change,
                     market_cap_before=market_cap_before,
+                    start_date=data.start_date,
+                    end_date=data.end_date,
                 )
             )
 

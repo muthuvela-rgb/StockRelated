@@ -9,6 +9,7 @@ session, which works through standard HTTP(S) proxies.
 
 from __future__ import annotations
 
+import datetime
 from typing import Optional
 
 from ._yahoo_http import YahooSession
@@ -45,6 +46,8 @@ class YahooHttpPriceDataSource:
 
         start_price = float(window[0][1])
         end_price = float(window[-1][1])
+        start_date = datetime.datetime.utcfromtimestamp(window[0][0]).strftime("%Y-%m-%d")
+        end_date = datetime.datetime.utcfromtimestamp(window[-1][0]).strftime("%Y-%m-%d")
 
         crumb = self._yahoo.crumb()
         if crumb is None:
@@ -75,4 +78,6 @@ class YahooHttpPriceDataSource:
             start_price=start_price,
             end_price=end_price,
             shares_outstanding=float(shares),
+            start_date=start_date,
+            end_date=end_date,
         )

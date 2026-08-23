@@ -18,6 +18,30 @@ def test_resolve_tickers_defaults_to_qqq_components_when_empty():
     assert resolve_tickers([]) == QQQ_COMPONENTS
 
 
+def test_format_summary_table_title_shows_comparison_window():
+    results = [
+        FallResult(
+            ticker="A", start_price=100.0, end_price=88.0, pct_change=-12.0, market_cap_before=20e9,
+            start_date="2026-08-14", end_date="2026-08-21",
+        ),
+        FallResult(
+            ticker="B", start_price=50.0, end_price=44.0, pct_change=-12.0, market_cap_before=15e9,
+            start_date="2026-08-15", end_date="2026-08-22",
+        ),
+    ]
+    table = format_summary_table(results)
+    assert "2026-08-14 to 2026-08-22" in table
+    assert "Current" in table
+
+
+def test_format_summary_table_falls_back_without_dates():
+    results = [
+        FallResult(ticker="A", start_price=100.0, end_price=88.0, pct_change=-12.0, market_cap_before=20e9),
+    ]
+    table = format_summary_table(results)
+    assert "Fall report" in table
+
+
 def test_format_summary_table_includes_all_results():
     results = [
         FallResult(ticker="A", start_price=100.0, end_price=88.0, pct_change=-12.0, market_cap_before=20e9),

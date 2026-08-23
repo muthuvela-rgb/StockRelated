@@ -55,7 +55,14 @@ def resolve_tickers(tickers: Sequence[str]) -> list[str]:
 
 
 def format_summary_table(results: list[FallResult]) -> str:
-    lines = [f"{'Ticker':<8}{'Start':>12}{'End':>12}{'Change %':>12}{'Mkt Cap ($B)':>16}"]
+    start_dates = [r.start_date for r in results if r.start_date]
+    end_dates = [r.end_date for r in results if r.end_date]
+    if start_dates and end_dates:
+        title = f"Fall report: {min(start_dates)} to {max(end_dates)} (Current = last close)"
+    else:
+        title = "Fall report"
+
+    lines = [title, f"{'Ticker':<8}{'Start':>12}{'Current':>12}{'Change %':>12}{'Mkt Cap ($B)':>16}"]
     for r in results:
         lines.append(
             f"{r.ticker:<8}{r.start_price:>12.2f}{r.end_price:>12.2f}"

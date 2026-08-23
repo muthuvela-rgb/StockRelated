@@ -44,9 +44,20 @@ date. Pass explicit tickers to bypass it, or edit that file to refresh it.
 python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA META --days 7 --fall-pct 10 --min-market-cap 10000000000
 ```
 
-Output starts with a summary table (ticker, start/end price, percentage
-change, and market cap in $B before the fall, sorted worst-first). For each
-qualifying stock, it then prints:
+Output starts with a titled summary table — the title states the actual
+comparison window (start date to end date) so it's clear which prices are
+being compared:
+
+```
+Fall report: 2026-08-14 to 2026-08-21 (Current = last close)
+Ticker         Start     Current    Change %    Mkt Cap ($B)
+INTC          102.50       90.07      -12.13          541.83
+WMT           115.27      103.70      -10.04          917.33
+```
+
+Rows are sorted worst-first (biggest drop at top); market cap shown is the
+cap *before* the fall (at the start price). For each qualifying stock, it
+then prints:
 
 - **Recent headlines** — up to 5 ticker-tagged news items from Yahoo Finance,
   most recent first, as a starting point for *why* it may have fallen
