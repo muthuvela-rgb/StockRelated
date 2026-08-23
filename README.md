@@ -37,7 +37,8 @@ change, and market cap (in $B) before the fall, sorted worst-first.
 ## How it works
 
 For each ticker, the tool fetches recent daily closing prices from Yahoo
-Finance and shares outstanding. It computes:
+Finance's public chart/quoteSummary endpoints (via plain `requests`, no
+scraping library) and shares outstanding. It computes:
 
 - `market_cap_before = start_price * shares_outstanding`
 - `pct_change = (end_price - start_price) / start_price * 100`

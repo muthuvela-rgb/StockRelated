@@ -6,7 +6,7 @@ import argparse
 from typing import Optional, Sequence
 
 from .detector import find_falling_stocks
-from .yfinance_source import YFinancePriceDataSource
+from .yahoo_source import YahooHttpPriceDataSource
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -35,7 +35,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
-    source = YFinancePriceDataSource()
+    source = YahooHttpPriceDataSource()
     results = find_falling_stocks(
         tickers=args.tickers,
         data_source=source,
