@@ -222,7 +222,10 @@ def fetch_strike_records(tk, ticker, expiration, option_type, price_type, strike
     """
     Pull the option chain for a single expiration, filter to the requested
     strike range (if any), print the per-strike table, and return a list of
-    record dicts: {expiration, strike, <price_type>, used_fallback}.
+    record dicts: {expiration, strike, premium, bid, ask, lastPrice, volume,
+    openInterest, used_fallback}, where "premium" is the requested
+    price_type (bid or ask), substituted with lastPrice when both bid and
+    ask are 0 (unless no_fallback is set).
     """
     chain = tk.option_chain(expiration)
     contracts = chain.puts if option_type == "put" else chain.calls
@@ -268,7 +271,7 @@ def fetch_strike_records(tk, ticker, expiration, option_type, price_type, strike
         if bid == 0 and ask == 0:
             zero_quote_count += 1
 
-        records.append({"expiration": expiration, "strike": strike, price_type: price,
+        records.append({"expiration": expiration, "strike": strike, "premium": price,
                          "bid": bid, "ask": ask, "lastPrice": last, "volume": vol,
                          "openInterest": oi, "used_fallback": used_fallback})
 
@@ -358,7 +361,7 @@ def main():
             )
             if r["used_fallback"]:
                 text += "\n(plotted lastPrice — bid/ask were 0)"
-            hover_points.append({"strike": r["strike"], "price": r[price_type], "text": text})
+            hover_points.append({"strike": r["strike"], "price": r["premium"], "text": text})
 
     for i, expiration in enumerate(expirations):
         exp_df = df[df["expiration"] == expiration]
@@ -367,12 +370,12 @@ def main():
         color = color_cycle[i % len(color_cycle)]
         line_label = expiration if len(expirations) > 1 else price_label
 
-        ax.plot(exp_df["strike"], exp_df[price_type], linewidth=1.5, color=color, zorder=1)
-        ax.scatter(exp_df["strike"], exp_df[price_type], color=color, label=line_label, zorder=2)
+        ax.plot(exp_df["strike"], exp_df["premium"], linewidth=1.5, color=color, zorder=1)
+        ax.scatter(exp_df["strike"], exp_df["premium"], color=color, label=line_label, zorder=2)
 
         fallback_pts = exp_df[exp_df["used_fallback"]]
         if not fallback_pts.empty:
-            ax.scatter(fallback_pts["strike"], fallback_pts[price_type], color="tab:orange",
+            ax.scatter(fallback_pts["strike"], fallback_pts["premium"], color="tab:orange",
                        marker="^", zorder=3,
                        label=None if fallback_labeled else "lastPrice (bid/ask were 0)")
             fallback_labeled = True
