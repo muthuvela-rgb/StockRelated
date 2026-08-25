@@ -74,7 +74,11 @@ What it does:
        CSV column) and marks the single highest one — across every strike
        and expiration plotted — with a large hot-pink star, called out in
        the legend and printed to the console.
-    8. Saves the chart and the data (CSV) named after the ticker,
+    8. When 2+ expirations are plotted, finds the strike where those curves
+       are furthest apart vertically (only strikes shared by 2+ expirations
+       are compared) and marks it with a purple double-headed arrow and a
+       dollar-amount label, also printed to the console.
+    9. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
 Notes:
@@ -368,6 +372,34 @@ def main():
           f"strike {best_strike:g}  |  expiration {best_expiration}  |  "
           f"{price_type} ${best_premium:.2f} / strike ${best_strike:g}")
 
+    # Find the strike where the plotted expiration curves are furthest apart
+    # vertically (only meaningful with 2+ expirations sharing that strike).
+    widest_gap = None
+    if len(expirations) < 2:
+        print("Only one expiration is plotted — need at least two curves to compare a "
+              "vertical gap between them.")
+    else:
+        strike_counts = df.groupby("strike")["premium"].transform("count")
+        shared = df[strike_counts >= 2]
+        if shared.empty:
+            print("No strikes are shared across the plotted expirations — can't compute a "
+                  "vertical gap between curves.")
+        else:
+            per_strike = shared.groupby("strike")["premium"].agg(["min", "max"])
+            per_strike["gap"] = per_strike["max"] - per_strike["min"]
+            gap_strike = per_strike["gap"].idxmax()
+            gap_value = per_strike.loc[gap_strike, "gap"]
+            at_strike = df[df["strike"] == gap_strike]
+            low_row = at_strike.loc[at_strike["premium"].idxmin()]
+            high_row = at_strike.loc[at_strike["premium"].idxmax()]
+            widest_gap = {"strike": gap_strike, "gap": gap_value,
+                          "low_premium": low_row["premium"], "high_premium": high_row["premium"],
+                          "low_expiration": low_row["expiration"],
+                          "high_expiration": high_row["expiration"]}
+            print(f"Widest vertical gap between curves: ${gap_value:.2f} at strike {gap_strike:g}  |  "
+                  f"{low_row['expiration']} ${low_row['premium']:.2f}  vs  "
+                  f"{high_row['expiration']} ${high_row['premium']:.2f}")
+
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -414,6 +446,19 @@ def main():
     ax.scatter([best_strike], [best_premium], s=400, color="#FF1493", edgecolor="black",
                linewidths=1.5, marker="*", zorder=6,
                label=f"Highest {price_label}/Strike: {best_ratio:.2%} (strike {best_strike:g})")
+
+    # Highlight the widest vertical gap between expiration curves with a double-headed
+    # arrow and dollar-amount label, in a color not used anywhere else on the chart.
+    if widest_gap is not None:
+        gs = widest_gap["strike"]
+        y_lo, y_hi = widest_gap["low_premium"], widest_gap["high_premium"]
+        ax.annotate("", xy=(gs, y_hi), xytext=(gs, y_lo),
+                    arrowprops=dict(arrowstyle="<->", color="purple", lw=2.5), zorder=7)
+        ax.plot([], [], color="purple", linewidth=2.5,
+                label=f"Widest gap: ${widest_gap['gap']:.2f} (strike {gs:g})")
+        ax.annotate(f"${widest_gap['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
+                    xytext=(8, 0), textcoords="offset points", color="purple",
+                    fontweight="bold", va="center", zorder=8)
 
     if current_price is not None:
         ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5, zorder=0,
