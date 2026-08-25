@@ -60,6 +60,11 @@ What it does:
        instead (marked with an orange triangle on the chart and a
        "used_fallback" column in the CSV) so you don't just get a flat zero
        line. Use --no-fallback to see raw zeros.
+       Hovering the mouse over any point in the interactive chart window
+       pops up a tooltip with that contract's expiration, strike, bid,
+       ask, last price, volume, and open interest. (Hover only works in
+       the live matplotlib window — the saved PNG is a static image.) A
+       dotted vertical line marks the underlying's current price.
     7. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
@@ -264,7 +269,8 @@ def fetch_strike_records(tk, ticker, expiration, option_type, price_type, strike
             zero_quote_count += 1
 
         records.append({"expiration": expiration, "strike": strike, price_type: price,
-                         "used_fallback": used_fallback})
+                         "bid": bid, "ask": ask, "lastPrice": last, "volume": vol,
+                         "openInterest": oi, "used_fallback": used_fallback})
 
     if zero_quote_count:
         print(f"  Note: {zero_quote_count} of {len(records)} strikes had bid=0 and ask=0.")
@@ -304,17 +310,21 @@ def main():
             print(f"Using expiration: {expiration}")
         expirations = [expiration]
 
+    current_price = get_current_price(tk)
+    if current_price is None:
+        print("Warning: could not fetch current stock price.")
+    else:
+        print(f"Current {ticker} price: ${current_price:.2f}")
+
     strike_low = strike_high = None
     if not args.no_strike_range:
         low_pct, high_pct = parse_strike_range(args.strike_range)
-        current_price = get_current_price(tk)
         if current_price is None:
-            print("Warning: could not fetch current stock price, ignoring --strike-range.")
+            print("Ignoring --strike-range since the current price is unavailable.")
         else:
             strike_low = current_price * low_pct / 100
             strike_high = current_price * high_pct / 100
-            print(f"Current {ticker} price: ${current_price:.2f}  |  "
-                  f"keeping strikes in [{strike_low:.2f}, {strike_high:.2f}] "
+            print(f"Keeping strikes in [{strike_low:.2f}, {strike_high:.2f}] "
                   f"({low_pct:g}%-{high_pct:g}% of price)")
 
     print(f"\nPlotting {price_type} for each {option_type}...")
@@ -332,9 +342,23 @@ def main():
     df = pd.DataFrame(all_records).sort_values(["expiration", "strike"])
 
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
-    plt.figure(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     fallback_labeled = False
+    hover_points = []  # {"strike", "price", "text"} for every plotted point, for hover lookup
+
+    def add_hover_points(sub_df, expiration):
+        for _, r in sub_df.iterrows():
+            text = (
+                f"{ticker} {option_label}  |  Exp: {expiration}\n"
+                f"Strike: {r['strike']:g}\n"
+                f"Bid: {r['bid']:.2f}   Ask: {r['ask']:.2f}\n"
+                f"Last: {r['lastPrice']:.2f}\n"
+                f"Vol: {int(r['volume'])}   OI: {int(r['openInterest'])}"
+            )
+            if r["used_fallback"]:
+                text += "\n(plotted lastPrice — bid/ask were 0)"
+            hover_points.append({"strike": r["strike"], "price": r[price_type], "text": text})
 
     for i, expiration in enumerate(expirations):
         exp_df = df[df["expiration"] == expiration]
@@ -343,28 +367,66 @@ def main():
         color = color_cycle[i % len(color_cycle)]
         line_label = expiration if len(expirations) > 1 else price_label
 
-        plt.plot(exp_df["strike"], exp_df[price_type], linewidth=1.5, color=color, zorder=1)
-        plt.scatter(exp_df["strike"], exp_df[price_type], color=color, label=line_label, zorder=2)
+        ax.plot(exp_df["strike"], exp_df[price_type], linewidth=1.5, color=color, zorder=1)
+        ax.scatter(exp_df["strike"], exp_df[price_type], color=color, label=line_label, zorder=2)
 
         fallback_pts = exp_df[exp_df["used_fallback"]]
         if not fallback_pts.empty:
-            plt.scatter(fallback_pts["strike"], fallback_pts[price_type], color="tab:orange",
-                        marker="^", zorder=3,
-                        label=None if fallback_labeled else "lastPrice (bid/ask were 0)")
+            ax.scatter(fallback_pts["strike"], fallback_pts[price_type], color="tab:orange",
+                       marker="^", zorder=3,
+                       label=None if fallback_labeled else "lastPrice (bid/ask were 0)")
             fallback_labeled = True
 
-    plt.legend()
+        add_hover_points(exp_df, expiration)
+
+    if current_price is not None:
+        ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5, zorder=0,
+                   label=f"Current price (${current_price:.2f})")
+
+    ax.legend()
 
     if len(expirations) == 1:
         title = f"{ticker} {expirations[0]} {option_label} — {price_label} Premium by Strike"
     else:
         title = (f"{ticker} {option_label} — {price_label} Premium by Strike "
                  f"({len(expirations)} nearest expirations)")
-    plt.title(title)
-    plt.xlabel("Strike Price ($)")
-    plt.ylabel(f"{option_label} {price_label} Premium ($)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    ax.set_title(title)
+    ax.set_xlabel("Strike Price ($)")
+    ax.set_ylabel(f"{option_label} {price_label} Premium ($)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    # Hover tooltip: shows the full option details for the nearest plotted point.
+    annot = ax.annotate("", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
+                         bbox=dict(boxstyle="round", fc="lightyellow", ec="gray"),
+                         arrowprops=dict(arrowstyle="->"), zorder=10)
+    annot.set_visible(False)
+    HOVER_RADIUS_PX = 15
+
+    def on_hover(event):
+        if event.inaxes != ax or not hover_points:
+            if annot.get_visible():
+                annot.set_visible(False)
+                fig.canvas.draw_idle()
+            return
+
+        xy_pixels = ax.transData.transform([(p["strike"], p["price"]) for p in hover_points])
+        best_idx, best_dist = None, None
+        for idx, (px, py) in enumerate(xy_pixels):
+            dist = (px - event.x) ** 2 + (py - event.y) ** 2
+            if best_dist is None or dist < best_dist:
+                best_dist, best_idx = dist, idx
+
+        if best_dist is not None and best_dist <= HOVER_RADIUS_PX ** 2:
+            point = hover_points[best_idx]
+            annot.xy = (point["strike"], point["price"])
+            annot.set_text(point["text"])
+            annot.set_visible(True)
+        else:
+            annot.set_visible(False)
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("motion_notify_event", on_hover)
 
     if len(expirations) == 1:
         exp_label = expirations[0]
@@ -372,7 +434,7 @@ def main():
         exp_label = f"{len(expirations)}exp_{expirations[0]}_to_{expirations[-1]}"
 
     out_png = f"{ticker}_{exp_label}_{option_type}_{price_type}s.png"
-    plt.savefig(out_png, dpi=150)
+    fig.savefig(out_png, dpi=150)
     print(f"\nSaved chart to {out_png}")
 
     out_csv = f"{ticker}_{exp_label}_{option_type}_{price_type}s.csv"
