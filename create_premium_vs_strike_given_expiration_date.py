@@ -79,8 +79,9 @@ What it does:
        are compared) and marks it with a purple double-headed arrow and a
        dollar-amount label, also printed to the console.
     9. Does the same for the strike where those curves are CLOSEST together
-       vertically, marked with a dashed teal double-headed arrow so it's
-       never confused with the widest-gap marker.
+       vertically (excluding strikes with an exact $0 gap, i.e. curves that
+       coincide exactly), marked with a dashed teal double-headed arrow so
+       it's never confused with the widest-gap marker.
     10. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
@@ -407,15 +408,23 @@ def main():
                   f"${widest_gap['low_premium']:.2f}  vs  {widest_gap['high_expiration']} "
                   f"${widest_gap['high_premium']:.2f}")
 
-            if len(per_strike) < 2:
-                print("Only one strike is shared across the plotted expirations — the widest "
-                      "and narrowest gap would be the same point, so skipping a separate marker.")
+            # Ignore $0 gaps (curves exactly overlapping) when picking the narrowest —
+            # a real, visible gap is more useful to call out than a coincidental tie.
+            nonzero = per_strike[per_strike["gap"] > 0]
+            if nonzero.empty:
+                print("Every strike shared across the plotted expirations has an identical "
+                      "premium (gap $0) — skipping the narrowest-gap marker.")
             else:
-                narrowest_gap = describe_gap(per_strike, per_strike["gap"].idxmin())
-                print(f"Narrowest vertical gap between curves: ${narrowest_gap['gap']:.2f} at "
-                      f"strike {narrowest_gap['strike']:g}  |  {narrowest_gap['low_expiration']} "
-                      f"${narrowest_gap['low_premium']:.2f}  vs  {narrowest_gap['high_expiration']} "
-                      f"${narrowest_gap['high_premium']:.2f}")
+                narrowest_strike = nonzero["gap"].idxmin()
+                if narrowest_strike == widest_gap["strike"]:
+                    print("The only strike with a nonzero gap is also the widest-gap strike — "
+                          "skipping a separate narrowest-gap marker to avoid overlapping arrows.")
+                else:
+                    narrowest_gap = describe_gap(per_strike, narrowest_strike)
+                    print(f"Narrowest (nonzero) vertical gap between curves: "
+                          f"${narrowest_gap['gap']:.2f} at strike {narrowest_gap['strike']:g}  |  "
+                          f"{narrowest_gap['low_expiration']} ${narrowest_gap['low_premium']:.2f}  "
+                          f"vs  {narrowest_gap['high_expiration']} ${narrowest_gap['high_premium']:.2f}")
 
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
