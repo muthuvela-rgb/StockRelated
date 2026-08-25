@@ -76,14 +76,15 @@ What it does:
        the legend and printed to the console.
     8. When 2+ expirations are plotted, compares each pair of CONSECUTIVE
        expirations (adjacent by date — e.g. with 3 expirations, only
-       1st-vs-2nd and 2nd-vs-3rd are compared, never 1st-vs-3rd) and finds
-       the strike/pair where the curves are furthest apart vertically,
-       marked with a purple double-headed arrow and a dollar-amount label,
-       also printed to the console.
-    9. Does the same for the strike/pair where consecutive curves are
-       CLOSEST together vertically (excluding an exact $0 gap, i.e. curves
-       that coincide exactly), marked with a dashed teal double-headed
-       arrow so it's never confused with the widest-gap marker.
+       1st-vs-2nd and 2nd-vs-3rd are compared, never 1st-vs-3rd) and, for
+       EVERY such pair, finds the strike where the two curves are furthest
+       apart vertically — marked with a solid purple double-headed arrow
+       and a dollar-amount label — and the strike where they're CLOSEST
+       together (excluding an exact $0 gap, i.e. curves that coincide
+       exactly) — marked with a dashed teal double-headed arrow. So with
+       3 expirations you'll see up to 2 purple and 2 teal arrows, one pair
+       of markers per consecutive expiration pair. All printed to the
+       console too.
     10. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
@@ -378,70 +379,65 @@ def main():
           f"strike {best_strike:g}  |  expiration {best_expiration}  |  "
           f"{price_type} ${best_premium:.2f} / strike ${best_strike:g}")
 
-    # Find the strikes where CONSECUTIVE expiration curves (adjacent by date —
-    # not just any two of the plotted curves) are furthest apart and closest
-    # together vertically. With exactly 2 expirations there's only one such
-    # pair, so this matches comparing the two curves directly.
-    def build_consecutive_gaps(df, expirations):
-        pairs = []
-        for exp_a, exp_b in zip(expirations, expirations[1:]):
-            a = df[df["expiration"] == exp_a][["strike", "premium"]].rename(
-                columns={"premium": "premium_a"})
-            b = df[df["expiration"] == exp_b][["strike", "premium"]].rename(
-                columns={"premium": "premium_b"})
-            merged = a.merge(b, on="strike", how="inner")
-            if merged.empty:
-                continue
-            merged["exp_a"], merged["exp_b"] = exp_a, exp_b
-            merged["gap"] = (merged["premium_b"] - merged["premium_a"]).abs()
-            pairs.append(merged)
-        if not pairs:
-            return pd.DataFrame(columns=["strike", "premium_a", "premium_b", "exp_a", "exp_b", "gap"])
-        return pd.concat(pairs, ignore_index=True)
+    # For EACH pair of consecutive (adjacent-by-date) expirations, find the strike
+    # where those two curves are furthest apart and closest together vertically.
+    # Every adjacent pair gets its own widest/narrowest marker, not just one
+    # overall winner across all pairs.
+    def pair_gaps(exp_a, exp_b):
+        a = df[df["expiration"] == exp_a][["strike", "premium"]].rename(columns={"premium": "premium_a"})
+        b = df[df["expiration"] == exp_b][["strike", "premium"]].rename(columns={"premium": "premium_b"})
+        merged = a.merge(b, on="strike", how="inner")
+        if merged.empty:
+            return None
+        merged["gap"] = (merged["premium_b"] - merged["premium_a"]).abs()
+        return merged
 
-    def describe_gap(row):
+    def describe_gap(row, exp_a, exp_b):
         if row["premium_a"] <= row["premium_b"]:
-            low_exp, low_p, high_exp, high_p = row["exp_a"], row["premium_a"], row["exp_b"], row["premium_b"]
+            low_exp, low_p, high_exp, high_p = exp_a, row["premium_a"], exp_b, row["premium_b"]
         else:
-            low_exp, low_p, high_exp, high_p = row["exp_b"], row["premium_b"], row["exp_a"], row["premium_a"]
+            low_exp, low_p, high_exp, high_p = exp_b, row["premium_b"], exp_a, row["premium_a"]
         return {"strike": row["strike"], "gap": row["gap"], "low_premium": low_p, "high_premium": high_p,
                 "low_expiration": low_exp, "high_expiration": high_exp}
 
-    widest_gap = None
-    narrowest_gap = None
+    gap_markers = []  # [{"type": "widest"/"narrowest", ...describe_gap() fields}, ...]
     if len(expirations) < 2:
         print("Only one expiration is plotted — need at least two curves to compare a "
               "vertical gap between them.")
     else:
-        consecutive_gaps = build_consecutive_gaps(df, expirations)
-        if consecutive_gaps.empty:
-            print("No strikes are shared between consecutive expirations — can't compute a "
-                  "vertical gap between curves.")
-        else:
-            widest_idx = consecutive_gaps["gap"].idxmax()
-            widest_gap = describe_gap(consecutive_gaps.loc[widest_idx])
-            print(f"Widest vertical gap between consecutive curves: ${widest_gap['gap']:.2f} at "
-                  f"strike {widest_gap['strike']:g}  |  {widest_gap['low_expiration']} "
-                  f"${widest_gap['low_premium']:.2f}  vs  {widest_gap['high_expiration']} "
-                  f"${widest_gap['high_premium']:.2f}")
+        for exp_a, exp_b in zip(expirations, expirations[1:]):
+            merged = pair_gaps(exp_a, exp_b)
+            if merged is None:
+                print(f"No strikes are shared between {exp_a} and {exp_b} — can't compute a "
+                      f"vertical gap between them.")
+                continue
+
+            widest_idx = merged["gap"].idxmax()
+            widest = describe_gap(merged.loc[widest_idx], exp_a, exp_b)
+            print(f"Widest gap {exp_a} vs {exp_b}: ${widest['gap']:.2f} at strike "
+                  f"{widest['strike']:g}  |  {widest['low_expiration']} ${widest['low_premium']:.2f}  "
+                  f"vs  {widest['high_expiration']} ${widest['high_premium']:.2f}")
+            gap_markers.append({"type": "widest", "exp_a": exp_a, "exp_b": exp_b, **widest})
 
             # Ignore $0 gaps (curves exactly overlapping) when picking the narrowest —
             # a real, visible gap is more useful to call out than a coincidental tie.
-            nonzero = consecutive_gaps[consecutive_gaps["gap"] > 0]
+            nonzero = merged[merged["gap"] > 0]
             if nonzero.empty:
-                print("Every strike shared between consecutive expirations has an identical "
-                      "premium (gap $0) — skipping the narrowest-gap marker.")
+                print(f"Every strike shared between {exp_a} and {exp_b} has an identical "
+                      f"premium (gap $0) — skipping the narrowest-gap marker for this pair.")
             else:
                 narrowest_idx = nonzero["gap"].idxmin()
                 if narrowest_idx == widest_idx:
-                    print("The only strike/pair with a nonzero gap is also the widest-gap one — "
-                          "skipping a separate narrowest-gap marker to avoid overlapping arrows.")
+                    print(f"The only strike with a nonzero gap between {exp_a} and {exp_b} is "
+                          f"also the widest-gap strike — skipping a separate narrowest marker "
+                          f"for this pair to avoid overlapping arrows.")
                 else:
-                    narrowest_gap = describe_gap(consecutive_gaps.loc[narrowest_idx])
-                    print(f"Narrowest (nonzero) vertical gap between consecutive curves: "
-                          f"${narrowest_gap['gap']:.2f} at strike {narrowest_gap['strike']:g}  |  "
-                          f"{narrowest_gap['low_expiration']} ${narrowest_gap['low_premium']:.2f}  "
-                          f"vs  {narrowest_gap['high_expiration']} ${narrowest_gap['high_premium']:.2f}")
+                    narrowest = describe_gap(merged.loc[narrowest_idx], exp_a, exp_b)
+                    print(f"Narrowest (nonzero) gap {exp_a} vs {exp_b}: ${narrowest['gap']:.2f} "
+                          f"at strike {narrowest['strike']:g}  |  {narrowest['low_expiration']} "
+                          f"${narrowest['low_premium']:.2f}  vs  {narrowest['high_expiration']} "
+                          f"${narrowest['high_premium']:.2f}")
+                    gap_markers.append({"type": "narrowest", "exp_a": exp_a, "exp_b": exp_b, **narrowest})
 
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -490,35 +486,25 @@ def main():
                linewidths=1.5, marker="*", zorder=6,
                label=f"Highest {price_label}/Strike: {best_ratio:.2%} (strike {best_strike:g})")
 
-    # Highlight the widest vertical gap between expiration curves with a double-headed
-    # arrow and dollar-amount label, in a color not used anywhere else on the chart.
-    if widest_gap is not None:
-        gs = widest_gap["strike"]
-        y_lo, y_hi = widest_gap["low_premium"], widest_gap["high_premium"]
-        ax.annotate("", xy=(gs, y_hi), xytext=(gs, y_lo),
-                    arrowprops=dict(arrowstyle="<->", color="purple", lw=2.5), zorder=7)
-        pair_suffix = (f", {widest_gap['low_expiration']} vs {widest_gap['high_expiration']}"
-                       if len(expirations) > 2 else "")
-        ax.plot([], [], color="purple", linewidth=2.5,
-                label=f"Widest gap: ${widest_gap['gap']:.2f} (strike {gs:g}{pair_suffix})")
-        ax.annotate(f"${widest_gap['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
-                    xytext=(8, 0), textcoords="offset points", color="purple",
-                    fontweight="bold", va="center", zorder=8)
+    # Highlight each pair's widest/narrowest vertical gap with a double-headed arrow
+    # and dollar-amount label — solid purple for widest, dashed teal for narrowest,
+    # colors/styles not used anywhere else on the chart, consistent across all pairs.
+    for marker in gap_markers:
+        gs = marker["strike"]
+        y_lo, y_hi = marker["low_premium"], marker["high_premium"]
+        is_widest = marker["type"] == "widest"
+        color = "purple" if is_widest else "teal"
+        style = dict(arrowstyle="<->", color=color, lw=2.5) if is_widest else \
+            dict(arrowstyle="<->", color=color, lw=2.5, linestyle="dashed")
+        kind = "Widest" if is_widest else "Narrowest"
 
-    # Highlight the narrowest vertical gap between expiration curves the same way,
-    # in a distinct color/line style so it's never confused with the widest-gap marker.
-    if narrowest_gap is not None:
-        gs = narrowest_gap["strike"]
-        y_lo, y_hi = narrowest_gap["low_premium"], narrowest_gap["high_premium"]
-        ax.annotate("", xy=(gs, y_hi), xytext=(gs, y_lo),
-                    arrowprops=dict(arrowstyle="<->", color="teal", lw=2.5, linestyle="dashed"),
-                    zorder=7)
-        pair_suffix = (f", {narrowest_gap['low_expiration']} vs {narrowest_gap['high_expiration']}"
-                       if len(expirations) > 2 else "")
-        ax.plot([], [], color="teal", linewidth=2.5, linestyle="dashed",
-                label=f"Narrowest gap: ${narrowest_gap['gap']:.2f} (strike {gs:g}{pair_suffix})")
-        ax.annotate(f"${narrowest_gap['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
-                    xytext=(8, 0), textcoords="offset points", color="teal",
+        ax.annotate("", xy=(gs, y_hi), xytext=(gs, y_lo), arrowprops=style, zorder=7)
+        pair_suffix = f", {marker['exp_a']} vs {marker['exp_b']}"
+        ax.plot([], [], color=color, linewidth=2.5,
+                linestyle="solid" if is_widest else "dashed",
+                label=f"{kind} gap: ${marker['gap']:.2f} (strike {gs:g}{pair_suffix})")
+        ax.annotate(f"${marker['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
+                    xytext=(8, 0), textcoords="offset points", color=color,
                     fontweight="bold", va="center", zorder=8)
 
     if current_price is not None:
