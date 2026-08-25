@@ -5,11 +5,12 @@ Requires: yfinance, pandas, matplotlib
     pip install yfinance pandas matplotlib
 
 Run:
-    python create_premium_vs_strike_given_expiration_date.py               # QQQ, nearest 3 expirations
+    python create_premium_vs_strike_given_expiration_date.py               # QQQ puts, nearest 3 expirations, 20%-150% of price
     python create_premium_vs_strike_given_expiration_date.py --ticker QQQ --expiration 2026-01-16
     python create_premium_vs_strike_given_expiration_date.py -t AAPL -e 2026-03-20 --option-type call
     python create_premium_vs_strike_given_expiration_date.py -t QQQ -e 2026-01-16 --price-type ask
-    python create_premium_vs_strike_given_expiration_date.py -t QQQ -e 2026-01-16 --strike-range 20
+    python create_premium_vs_strike_given_expiration_date.py -t QQQ -e 2026-01-16 --strike-range 50-150
+    python create_premium_vs_strike_given_expiration_date.py -t QQQ --no-strike-range   # every listed strike
     python create_premium_vs_strike_given_expiration_date.py -t AAPL --num-expirations 5
 
 Options:
@@ -22,11 +23,14 @@ Options:
     --num-expirations     When -e/--expiration is NOT given, how many of the
                           nearest expirations (by calendar-day distance from
                           today) to plot together (default: 3).
-    --option-type         "put" or "call" (default: call)
+    --option-type         "put" or "call" (default: put)
     -p, --price-type      Which quote to plot: "bid" or "ask" (default: bid)
-    --strike-range        Limit strikes to within +/- this percent of the
-                          current stock price (default: show every listed
-                          strike).
+    --strike-range        Keep strikes whose price falls within this
+                          "LOW-HIGH" percent range of the current stock
+                          price (default: "20-150", i.e. 20% to 150% of the
+                          current price).
+    --no-strike-range     Disable strike filtering, showing every listed
+                          strike regardless of --strike-range.
     --no-fallback         Disable the lastPrice fallback (see below), showing
                           raw 0 values instead.
 
@@ -42,9 +46,10 @@ What it does:
            (default 3) listed expirations nearest to today's date, and
            plots all of them together as separate lines on one chart.
     3. Pulls the put or call chain for each expiration in use.
-    4. Optionally restricts to strikes within --strike-range percent of the
-       current stock price, to keep far out-of-the-money noise off the
-       chart.
+    4. Restricts to strikes whose price falls within --strike-range percent
+       of the current stock price (default 20%-150%), to keep far
+       out-of-the-money noise off the chart. Use --no-strike-range to see
+       every listed strike instead.
     5. Prints a table with strike, bid, ask, lastPrice, volume, and open
        interest for every strike kept, so you can see exactly what data
        Yahoo returned.
@@ -96,19 +101,40 @@ def parse_args():
     parser.add_argument("--num-expirations", type=int, default=3,
                          help="When --expiration is omitted, how many of the nearest "
                               "expirations to today to plot together (default: 3).")
-    parser.add_argument("--option-type", type=str, default="call",
+    parser.add_argument("--option-type", type=str, default="put",
                          choices=["put", "call"],
-                         help='Option type: "put" or "call" (default: call)')
+                         help='Option type: "put" or "call" (default: put)')
     parser.add_argument("-p", "--price-type", type=str, default="bid",
                          choices=["bid", "ask"],
                          help='Which quote to plot: "bid" or "ask" (default: bid)')
-    parser.add_argument("--strike-range", type=float, default=None,
-                         help="Limit strikes to within +/- this percent of the current stock "
-                              "price (default: show every listed strike).")
+    parser.add_argument("--strike-range", type=str, default="20-150",
+                         help='Keep strikes priced within this "LOW-HIGH" percent range of the '
+                              'current stock price, e.g. "20-150" (default: "20-150", i.e. 20%% '
+                              "to 150%% of the current price).")
+    parser.add_argument("--no-strike-range", action="store_true",
+                         help="Disable strike filtering, showing every listed strike regardless "
+                              "of --strike-range.")
     parser.add_argument("--no-fallback", action="store_true",
                          help="Disable fallback to lastPrice when bid and ask are both 0 "
                               "(shows raw zeros instead).")
     return parser.parse_args()
+
+
+def parse_strike_range(range_str):
+    """
+    Parse the --strike-range argument, a "LOW-HIGH" percent range (e.g.
+    "20-150"), into (low_pct, high_pct) floats.
+    """
+    parts = range_str.strip().replace("%", "").split("-")
+    if len(parts) != 2:
+        sys.exit(f"Could not parse --strike-range '{range_str}'. Use a range like '20-150'.")
+    try:
+        low_pct, high_pct = float(parts[0]), float(parts[1])
+    except ValueError:
+        sys.exit(f"Could not parse --strike-range '{range_str}' as numbers.")
+    if low_pct > high_pct:
+        sys.exit(f"--strike-range '{range_str}': low end must not exceed the high end.")
+    return low_pct, high_pct
 
 
 def find_expiration(all_exps, requested):
@@ -279,16 +305,17 @@ def main():
         expirations = [expiration]
 
     strike_low = strike_high = None
-    if args.strike_range is not None:
+    if not args.no_strike_range:
+        low_pct, high_pct = parse_strike_range(args.strike_range)
         current_price = get_current_price(tk)
         if current_price is None:
             print("Warning: could not fetch current stock price, ignoring --strike-range.")
         else:
-            strike_low = current_price * (1 - args.strike_range / 100)
-            strike_high = current_price * (1 + args.strike_range / 100)
+            strike_low = current_price * low_pct / 100
+            strike_high = current_price * high_pct / 100
             print(f"Current {ticker} price: ${current_price:.2f}  |  "
                   f"keeping strikes in [{strike_low:.2f}, {strike_high:.2f}] "
-                  f"(+/-{args.strike_range:g}%)")
+                  f"({low_pct:g}%-{high_pct:g}% of price)")
 
     print(f"\nPlotting {price_type} for each {option_type}...")
 
