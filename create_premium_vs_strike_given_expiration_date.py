@@ -66,10 +66,15 @@ What it does:
        line. Use --no-fallback to see raw zeros.
        Hovering the mouse over any point in the interactive chart window
        pops up a tooltip with that contract's expiration, strike, bid,
-       ask, last price, volume, and open interest. (Hover only works in
-       the live matplotlib window — the saved PNG is a static image.) A
-       dotted vertical line marks the underlying's current price.
-    7. Saves the chart and the data (CSV) named after the ticker,
+       ask, last price, volume, open interest, and premium/strike ratio.
+       (Hover only works in the live matplotlib window — the saved PNG is
+       a static image.) A dotted vertical line marks the underlying's
+       current price.
+    7. Computes premium/strike for every plotted point (the "premium_to_strike"
+       CSV column) and marks the single highest one — across every strike
+       and expiration plotted — with a large hot-pink star, called out in
+       the legend and printed to the console.
+    8. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
 Notes:
@@ -352,6 +357,16 @@ def main():
         sys.exit("No data collected — nothing to plot.")
 
     df = pd.DataFrame(all_records).sort_values(["expiration", "strike"])
+    df["premium_to_strike"] = df["premium"] / df["strike"]
+
+    best_row = df.loc[df["premium_to_strike"].idxmax()]
+    best_strike = best_row["strike"]
+    best_expiration = best_row["expiration"]
+    best_premium = best_row["premium"]
+    best_ratio = best_row["premium_to_strike"]
+    print(f"\nHighest {price_type}-to-strike ratio: {best_ratio:.2%}  |  "
+          f"strike {best_strike:g}  |  expiration {best_expiration}  |  "
+          f"{price_type} ${best_premium:.2f} / strike ${best_strike:g}")
 
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -366,10 +381,13 @@ def main():
                 f"Strike: {r['strike']:g}\n"
                 f"Bid: {r['bid']:.2f}   Ask: {r['ask']:.2f}\n"
                 f"Last: {r['lastPrice']:.2f}\n"
-                f"Vol: {int(r['volume'])}   OI: {int(r['openInterest'])}"
+                f"Vol: {int(r['volume'])}   OI: {int(r['openInterest'])}\n"
+                f"{price_label}/Strike: {r['premium_to_strike']:.2%}"
             )
             if r["used_fallback"]:
                 text += "\n(plotted lastPrice — bid/ask were 0)"
+            if expiration == best_expiration and r["strike"] == best_strike:
+                text = "★ HIGHEST PREMIUM/STRIKE RATIO\n" + text
             hover_points.append({"strike": r["strike"], "price": r["premium"], "text": text})
 
     for i, expiration in enumerate(expirations):
@@ -390,6 +408,12 @@ def main():
             fallback_labeled = True
 
         add_hover_points(exp_df, expiration)
+
+    # Highlight the strike with the single highest premium-to-strike ratio, in a
+    # bold, high-contrast color/marker so it stands out from the regular line dots.
+    ax.scatter([best_strike], [best_premium], s=400, color="#FF1493", edgecolor="black",
+               linewidths=1.5, marker="*", zorder=6,
+               label=f"Highest {price_label}/Strike: {best_ratio:.2%} (strike {best_strike:g})")
 
     if current_price is not None:
         ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5, zorder=0,
