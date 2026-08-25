@@ -12,6 +12,7 @@ Run:
     python create_premium_vs_strike_given_expiration_date.py -t QQQ -e 2026-01-16 --strike-range 50-150
     python create_premium_vs_strike_given_expiration_date.py -t QQQ --no-strike-range   # every listed strike
     python create_premium_vs_strike_given_expiration_date.py -t AAPL --num-expirations 5
+    python create_premium_vs_strike_given_expiration_date.py -t QQQ --log-scale         # log-scale Y-axis
 
 Options:
     -t, --ticker         Stock/ETF ticker symbol (default: QQQ)
@@ -33,6 +34,9 @@ Options:
                           strike regardless of --strike-range.
     --no-fallback         Disable the lastPrice fallback (see below), showing
                           raw 0 values instead.
+    --log-scale           Plot the Y-axis (premium) on a log scale instead of
+                          linear. Points priced at exactly $0 can't be shown
+                          on a log scale and are dropped with a warning.
 
 What it does:
     1. Pulls the live list of option expiration dates for the given ticker
@@ -119,6 +123,11 @@ def parse_args():
     parser.add_argument("--no-strike-range", action="store_true",
                          help="Disable strike filtering, showing every listed strike regardless "
                               "of --strike-range.")
+    parser.add_argument("--log-scale", action="store_true",
+                         help="Plot the Y-axis (premium) on a log scale instead of linear. "
+                              "Useful when premiums span a wide range (e.g. far-OTM vs "
+                              "near-the-money strikes). Points priced at exactly $0 can't be "
+                              "shown on a log scale and are dropped with a warning.")
     parser.add_argument("--no-fallback", action="store_true",
                          help="Disable fallback to lastPrice when bid and ask are both 0 "
                               "(shows raw zeros instead).")
@@ -393,10 +402,25 @@ def main():
     else:
         title = (f"{ticker} {option_label} — {price_label} Premium by Strike "
                  f"({len(expirations)} nearest expirations)")
+    y_label = f"{option_label} {price_label} Premium ($)"
+    if args.log_scale:
+        title += " (log scale)"
+        y_label += " — log scale"
+
+        non_positive = df[df["premium"] <= 0]
+        if not non_positive.empty:
+            print(f"\nWarning: {len(non_positive)} point(s) have a premium of $0 and can't be "
+                  f"shown on the log-scale Y-axis (log of 0/negative is undefined) — they'll be "
+                  f"missing from the chart.")
+
+        ax.set_yscale("log")
+        ax.grid(True, which="both", alpha=0.3)
+    else:
+        ax.grid(True, alpha=0.3)
+
     ax.set_title(title)
     ax.set_xlabel("Strike Price ($)")
-    ax.set_ylabel(f"{option_label} {price_label} Premium ($)")
-    ax.grid(True, alpha=0.3)
+    ax.set_ylabel(y_label)
     fig.tight_layout()
 
     # Hover tooltip: shows the full option details for the nearest plotted point.
@@ -436,11 +460,13 @@ def main():
     else:
         exp_label = f"{len(expirations)}exp_{expirations[0]}_to_{expirations[-1]}"
 
-    out_png = f"{ticker}_{exp_label}_{option_type}_{price_type}s.png"
+    scale_suffix = "_log" if args.log_scale else ""
+
+    out_png = f"{ticker}_{exp_label}_{option_type}_{price_type}s{scale_suffix}.png"
     fig.savefig(out_png, dpi=150)
     print(f"\nSaved chart to {out_png}")
 
-    out_csv = f"{ticker}_{exp_label}_{option_type}_{price_type}s.csv"
+    out_csv = f"{ticker}_{exp_label}_{option_type}_{price_type}s{scale_suffix}.csv"
     df.to_csv(out_csv, index=False)
     print(f"Saved data to {out_csv}")
 
