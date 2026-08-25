@@ -78,7 +78,10 @@ What it does:
        are furthest apart vertically (only strikes shared by 2+ expirations
        are compared) and marks it with a purple double-headed arrow and a
        dollar-amount label, also printed to the console.
-    9. Saves the chart and the data (CSV) named after the ticker,
+    9. Does the same for the strike where those curves are CLOSEST together
+       vertically, marked with a dashed teal double-headed arrow so it's
+       never confused with the widest-gap marker.
+    10. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
 Notes:
@@ -372,9 +375,19 @@ def main():
           f"strike {best_strike:g}  |  expiration {best_expiration}  |  "
           f"{price_type} ${best_premium:.2f} / strike ${best_strike:g}")
 
-    # Find the strike where the plotted expiration curves are furthest apart
-    # vertically (only meaningful with 2+ expirations sharing that strike).
+    # Find the strikes where the plotted expiration curves are furthest apart and
+    # closest together vertically (only meaningful with 2+ expirations sharing a strike).
+    def describe_gap(per_strike, gap_strike):
+        gap_value = per_strike.loc[gap_strike, "gap"]
+        at_strike = df[df["strike"] == gap_strike]
+        low_row = at_strike.loc[at_strike["premium"].idxmin()]
+        high_row = at_strike.loc[at_strike["premium"].idxmax()]
+        return {"strike": gap_strike, "gap": gap_value,
+                "low_premium": low_row["premium"], "high_premium": high_row["premium"],
+                "low_expiration": low_row["expiration"], "high_expiration": high_row["expiration"]}
+
     widest_gap = None
+    narrowest_gap = None
     if len(expirations) < 2:
         print("Only one expiration is plotted — need at least two curves to compare a "
               "vertical gap between them.")
@@ -387,18 +400,22 @@ def main():
         else:
             per_strike = shared.groupby("strike")["premium"].agg(["min", "max"])
             per_strike["gap"] = per_strike["max"] - per_strike["min"]
-            gap_strike = per_strike["gap"].idxmax()
-            gap_value = per_strike.loc[gap_strike, "gap"]
-            at_strike = df[df["strike"] == gap_strike]
-            low_row = at_strike.loc[at_strike["premium"].idxmin()]
-            high_row = at_strike.loc[at_strike["premium"].idxmax()]
-            widest_gap = {"strike": gap_strike, "gap": gap_value,
-                          "low_premium": low_row["premium"], "high_premium": high_row["premium"],
-                          "low_expiration": low_row["expiration"],
-                          "high_expiration": high_row["expiration"]}
-            print(f"Widest vertical gap between curves: ${gap_value:.2f} at strike {gap_strike:g}  |  "
-                  f"{low_row['expiration']} ${low_row['premium']:.2f}  vs  "
-                  f"{high_row['expiration']} ${high_row['premium']:.2f}")
+
+            widest_gap = describe_gap(per_strike, per_strike["gap"].idxmax())
+            print(f"Widest vertical gap between curves: ${widest_gap['gap']:.2f} at strike "
+                  f"{widest_gap['strike']:g}  |  {widest_gap['low_expiration']} "
+                  f"${widest_gap['low_premium']:.2f}  vs  {widest_gap['high_expiration']} "
+                  f"${widest_gap['high_premium']:.2f}")
+
+            if len(per_strike) < 2:
+                print("Only one strike is shared across the plotted expirations — the widest "
+                      "and narrowest gap would be the same point, so skipping a separate marker.")
+            else:
+                narrowest_gap = describe_gap(per_strike, per_strike["gap"].idxmin())
+                print(f"Narrowest vertical gap between curves: ${narrowest_gap['gap']:.2f} at "
+                      f"strike {narrowest_gap['strike']:g}  |  {narrowest_gap['low_expiration']} "
+                      f"${narrowest_gap['low_premium']:.2f}  vs  {narrowest_gap['high_expiration']} "
+                      f"${narrowest_gap['high_premium']:.2f}")
 
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -458,6 +475,20 @@ def main():
                 label=f"Widest gap: ${widest_gap['gap']:.2f} (strike {gs:g})")
         ax.annotate(f"${widest_gap['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
                     xytext=(8, 0), textcoords="offset points", color="purple",
+                    fontweight="bold", va="center", zorder=8)
+
+    # Highlight the narrowest vertical gap between expiration curves the same way,
+    # in a distinct color/line style so it's never confused with the widest-gap marker.
+    if narrowest_gap is not None:
+        gs = narrowest_gap["strike"]
+        y_lo, y_hi = narrowest_gap["low_premium"], narrowest_gap["high_premium"]
+        ax.annotate("", xy=(gs, y_hi), xytext=(gs, y_lo),
+                    arrowprops=dict(arrowstyle="<->", color="teal", lw=2.5, linestyle="dashed"),
+                    zorder=7)
+        ax.plot([], [], color="teal", linewidth=2.5, linestyle="dashed",
+                label=f"Narrowest gap: ${narrowest_gap['gap']:.2f} (strike {gs:g})")
+        ax.annotate(f"${narrowest_gap['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
+                    xytext=(8, 0), textcoords="offset points", color="teal",
                     fontweight="bold", va="center", zorder=8)
 
     if current_price is not None:
