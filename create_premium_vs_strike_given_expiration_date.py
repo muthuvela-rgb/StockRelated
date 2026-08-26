@@ -85,6 +85,12 @@ What it does:
        3 expirations you'll see up to 2 purple and 2 teal arrows, one pair
        of markers per consecutive expiration pair. All printed to the
        console too.
+    9. For EACH expiration curve, computes the slope (premium change per
+       $1 of strike) between every pair of adjacent (consecutive-by-strike)
+       strikes on that curve, and marks the single largest (steepest
+       upward) slope with a thick green highlighted segment and a
+       "slope X.XX" label — one marker per plotted expiration. Printed to
+       the console too.
     10. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
@@ -439,6 +445,34 @@ def main():
                           f"${narrowest['high_premium']:.2f}")
                     gap_markers.append({"type": "narrowest", "exp_a": exp_a, "exp_b": exp_b, **narrowest})
 
+    # For EACH expiration curve, find the pair of adjacent (consecutive-by-strike)
+    # strikes with the largest slope (premium change per $1 of strike) — the
+    # steepest-rising segment of that curve. One marker per plotted expiration.
+    def steepest_slope(exp_df):
+        rows = list(exp_df.itertuples(index=False))
+        best = None
+        for a, b in zip(rows, rows[1:]):
+            d_strike = b.strike - a.strike
+            if d_strike == 0:
+                continue  # duplicate strike, slope undefined
+            slope = (b.premium - a.premium) / d_strike
+            if best is None or slope > best["slope"]:
+                best = {"strike_a": a.strike, "strike_b": b.strike,
+                        "premium_a": a.premium, "premium_b": b.premium, "slope": slope}
+        return best
+
+    slope_markers = []  # [{"expiration": ..., "strike_a"/"strike_b"/"premium_a"/"premium_b"/"slope": ...}, ...]
+    for expiration in expirations:
+        exp_df = df[df["expiration"] == expiration].sort_values("strike")
+        steepest = steepest_slope(exp_df)
+        if steepest is None:
+            print(f"{expiration}: fewer than two distinct strikes — can't compute a slope.")
+            continue
+        slope_markers.append({"expiration": expiration, **steepest})
+        print(f"Steepest slope for {expiration}: {steepest['slope']:.4f} {price_type} $/strike "
+              f"(strike {steepest['strike_a']:g} -> {steepest['strike_b']:g}, "
+              f"{price_type} ${steepest['premium_a']:.2f} -> ${steepest['premium_b']:.2f})")
+
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -506,6 +540,26 @@ def main():
         ax.annotate(f"${marker['gap']:.2f}", xy=(gs, (y_lo + y_hi) / 2),
                     xytext=(8, 0), textcoords="offset points", color=color,
                     fontweight="bold", va="center", zorder=8)
+
+    # Highlight each expiration curve's steepest adjacent-strike slope with a
+    # thick green segment and a "slope X.XX" label — a color/style not used
+    # anywhere else on the chart, one marker per plotted expiration.
+    SLOPE_COLOR = "forestgreen"
+    for marker in slope_markers:
+        sa, sb = marker["strike_a"], marker["strike_b"]
+        pa, pb = marker["premium_a"], marker["premium_b"]
+        mid_x, mid_y = (sa + sb) / 2, (pa + pb) / 2
+
+        ax.plot([sa, sb], [pa, pb], color=SLOPE_COLOR, linewidth=4,
+                solid_capstyle="round", alpha=0.85, zorder=5)
+        ax.annotate(f"slope {marker['slope']:.2f}", xy=(mid_x, mid_y), xytext=(0, 10),
+                    textcoords="offset points", ha="center", color=SLOPE_COLOR,
+                    fontweight="bold", zorder=9)
+
+        exp_suffix = f", {marker['expiration']}" if len(expirations) > 1 else ""
+        ax.plot([], [], color=SLOPE_COLOR, linewidth=4,
+                label=f"Steepest slope: {marker['slope']:.2f} $/strike "
+                      f"(strike {sa:g}→{sb:g}{exp_suffix})")
 
     if current_price is not None:
         ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5, zorder=0,
