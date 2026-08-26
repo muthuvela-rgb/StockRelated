@@ -109,6 +109,35 @@ offline against fake data:
 pytest
 ```
 
+### `put_annualized_return_wrapper.py` — multi-ticker put annualized-return scanner
+
+For one or more stocks/ETFs, pulls every option expiration whose days-to-
+expiration falls within a `--min-days`/`--max-days` window (default 0-365
+days out), and for each expiration, scans every put strike within a
+percentage band of the current price (or one specific `--strike`), computing
+an annualized return from both the bid and ask premium — using an
+approximated portfolio-margin capital basis by default (`--no-margin` for
+cash-secured/full-strike instead). With multiple tickers, results are
+combined and the top rows across all of them are printed together.
+
+```bash
+python put_annualized_return_wrapper.py
+python put_annualized_return_wrapper.py --ticker QQQ,AAPL,MSFT
+python put_annualized_return_wrapper.py -t QQQ --min-days 30 --max-days 90
+python put_annualized_return_wrapper.py -t QQQ --strike 580
+python put_annualized_return_wrapper.py -t QQQ --pct-low 50 --pct-high 90
+```
+
+If `-t/--ticker` is omitted, it scans a persisted default watchlist stored
+in `watchlist.json` (seeded on first run with SPCX, MU, SNDK, ALAB, NVDA,
+SKHY, META, TSLA, QQQ). Manage that list without running a scan via
+`--add-ticker`, `--remove-ticker`, and `--list-tickers`. Run with `-h` for
+the full option list (`--min-days`, `--max-days`, `--strike`, `--pct-low`,
+`--pct-high`, `--output`, `--no-plot`, `--top`, `--no-fallback`,
+`--no-margin`, `--margin-shock-pct`, `--margin-floor`, `--margin-floor-pct`).
+Saves a per-ticker CSV/chart plus a combined CSV and chart across all
+tickers scanned.
+
 ### `short_dated_put_screener.py` — top short-dated puts by annualized return
 
 Scans a universe of stocks/ETFs (by default the QQQ / Nasdaq-100
