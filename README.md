@@ -211,6 +211,21 @@ If `-e/--expiration` is omitted, it plots the nearest few expirations
 together (`--num-expirations`, default 3) so gaps between adjacent
 expiration curves can be compared. Run with `-h` for the full option list.
 
+For each plotted expiration curve, the script also marks where premium rises
+fastest, two ways:
+
+- **Steepest adjacent-strike slope** — the single pair of consecutive listed
+  strikes with the largest premium change per $1 of strike, highlighted with
+  a green segment and a `slope X.XX` label.
+- **Widest 20-bin (5%-of-price) premium difference** — splits the strike
+  axis from $0 to the current price into 20 equal-width bins and finds the
+  bin with the largest premium difference between its highest- and
+  lowest-strike point, highlighted with a shaded price band and a crimson
+  `bin Δ$X.XX` label. A coarser, fixed-width view of where premium jumps
+  most, complementing the adjacent-strike marker above.
+
+Both are printed to the console too, one marker per plotted expiration.
+
 ### `plot_from_csv.py` — offline plot from a saved CSV
 
 Standalone plotting script — no internet/API calls. Reads a CSV like the ones
