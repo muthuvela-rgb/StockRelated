@@ -7,11 +7,61 @@ Finance, SEC EDGAR, StockTwits) — no API keys, no brokerage credentials, and
 none of it executes trades. This is data retrieval / analysis tooling, not
 investment advice.
 
-## Install
+## Getting Started (new to GitHub? start here)
+
+This is a GitHub repository — a folder of code hosted online that you copy
+("clone") down to your own computer to run. Here's the full path from zero.
+
+### 1. Install the prerequisites
+
+- **Python 3** — check if you already have it by opening a terminal
+  (Terminal on Mac, Command Prompt/PowerShell on Windows) and running
+  `python3 --version` (or `python --version` on Windows). If that fails,
+  download it from [python.org/downloads](https://www.python.org/downloads/).
+- **Git** — check with `git --version`. If it's missing, get it from
+  [git-scm.com/downloads](https://git-scm.com/downloads) (Mac users can
+  also just run `git --version` once — macOS will offer to install it for
+  you). You technically don't need Git if you use the ZIP download in step
+  2 instead, but installing it now makes it much easier to get future
+  updates to this repo.
+
+### 2. Get the code onto your computer
+
+**Option A — clone with Git (recommended):** open a terminal, navigate to
+wherever you want the folder to live (e.g. `cd ~/Documents`), then run:
+
+```bash
+git clone https://github.com/muthuvela-rgb/StockRelated.git
+cd StockRelated
+```
+
+This creates a `StockRelated` folder with the full project, connected to
+GitHub so you can pull future updates with `git pull`.
+
+**Option B — download a ZIP (no Git required):** on the repository's GitHub
+page, click the green **Code** button, choose **Download ZIP**, then unzip
+it and open a terminal in that unzipped folder. This is a one-time snapshot
+— you'll need to re-download the ZIP to get future updates instead of
+`git pull`.
+
+### 3. Install the Python dependencies
+
+From inside the project folder:
 
 ```bash
 pip install -r requirements.txt
 ```
+
+(If `pip` isn't found, try `pip3` instead.)
+
+### 4. Try running something
+
+```bash
+python3 stock_earnings_report.py --tickers AAPL
+```
+
+If that prints a report for AAPL, you're set up correctly. See the [Tools](#tools)
+section below for what every script in this repo does and how to run it.
 
 ## Tools
 
