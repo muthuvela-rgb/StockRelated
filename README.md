@@ -1,9 +1,11 @@
-# Stock-fall
+# StockRelated
 
-Given a list of stocks, find any that fell more than a configurable percentage
-(default 10%) within a configurable lookback window (default 1 week), limited
-to stocks whose market cap **before** the fall exceeded a configurable
-threshold (default $10B).
+A collection of independent Python scripts for screening, plotting, and
+reporting on stocks and their options, plus a small `stock_fall_detector`
+package with test coverage. Everything reads free public data (Yahoo
+Finance, SEC EDGAR, StockTwits) — no API keys, no brokerage credentials, and
+none of it executes trades. This is data retrieval / analysis tooling, not
+investment advice.
 
 ## Install
 
@@ -11,7 +13,14 @@ threshold (default $10B).
 pip install -r requirements.txt
 ```
 
-## Usage
+## Tools
+
+### `stock_fall_detector` — find stocks that fell sharply
+
+Given a list of stocks, find any that fell more than a configurable percentage
+(default 10%) within a configurable lookback window (default 1 week), limited
+to stocks whose market cap **before** the fall exceeded a configurable
+threshold (default $10B).
 
 ```bash
 python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA
@@ -28,7 +37,7 @@ python -m stock_fall_detector.cli
 snapshot — the index is periodically reconstituted, so it will drift out of
 date. Pass explicit tickers to bypass it, or edit that file to refresh it.
 
-### Options
+#### Options
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -38,7 +47,7 @@ date. Pass explicit tickers to bypass it, or edit that file to refresh it.
 | `--no-context` | off | Skip the news/analyst/social section below the summary table (faster) |
 | `--no-technicals` | off | Skip the RSI/volatility/Bollinger/high-low section below the summary table (faster) |
 
-### Example
+#### Example
 
 ```bash
 python -m stock_fall_detector.cli AAPL MSFT TSLA NVDA META --days 7 --fall-pct 10 --min-market-cap 10000000000
@@ -80,8 +89,6 @@ Any section can come back empty (thin news coverage, no analyst coverage, no
 tagged StockTwits posts, no options chain) — that's reported as "unavailable"
 rather than guessed at.
 
-## How it works
-
 For each ticker, the tool fetches recent daily closing prices from Yahoo
 Finance's public chart/quoteSummary endpoints (via plain `requests`, no
 scraping library) and shares outstanding. It computes:
@@ -92,8 +99,6 @@ scraping library) and shares outstanding. It computes:
 A stock is reported if `market_cap_before` exceeds `--min-market-cap` **and**
 `pct_change` is a drop of at least `--fall-pct`.
 
-## Tests
-
 The core detection logic (`stock_fall_detector.detector.find_falling_stocks`)
 is decoupled from the data source via a small `PriceDataSource` protocol, and
 the news/analyst/social report formatting (`stock_fall_detector.cli.format_context_report`)
@@ -103,3 +108,148 @@ offline against fake data:
 ```bash
 pytest
 ```
+
+### `short_dated_put_screener.py` — top short-dated puts by annualized return
+
+Scans a universe of stocks/ETFs (by default the QQQ / Nasdaq-100
+constituents bundled in the script) and reports the top N put options ranked
+by annualized return, subject to filters on expiration window, minimum bid
+premium, moneyness (how far out-of-the-money), and underlying market cap.
+"Annualized return" is computed against an approximated portfolio-margin
+capital basis by default (`--no-margin` switches to a cash-secured/full-strike
+basis instead) — this is a simplified linear estimate for screening, not a
+broker-exact figure.
+
+```bash
+python short_dated_put_screener.py --max-moneyness 90
+python short_dated_put_screener.py --max-moneyness 85 --days 15
+python short_dated_put_screener.py -t QQQ,AAPL,MSFT --max-moneyness 95
+python short_dated_put_screener.py --max-moneyness 90 --min-premium 3 --top 20
+```
+
+`--max-moneyness` is required. Run `python short_dated_put_screener.py -h`
+for the full option list (`--days`, `--min-premium`, `--min-market-cap`,
+`--top`, `--no-margin`, `--margin-shock-pct`, `--margin-floor-pct`,
+`--margin-floor`, `--margin-premium-buffer-pct`, `--output`). Results are
+printed to the console and written in full to a CSV
+(`short_dated_put_screen.csv` by default).
+
+### `run_and_notify.py` — daily screener run + macOS notification
+
+Wraps `short_dated_put_screener.py` for a scheduled/cron-style daily run: runs
+it with a fixed set of filters, saves the full results CSV, appends the full
+console output to a dated file under `logs/`, pops a macOS notification
+banner (via `osascript`) with a one-line summary of the best result, and
+copies the dated log into a local Google Drive for Desktop sync folder (no
+API credentials — Drive's own background sync uploads it). Intended to be
+triggered by `launchd` every morning; also safe to run by hand:
+
+```bash
+python3 run_and_notify.py
+```
+
+macOS-specific (uses `osascript` for notifications); the Google Drive copy
+step is skipped gracefully if the sync folder isn't found.
+
+### `create_premium_vs_expiration_date_given_strike_price.py` — premium vs. expiration plot
+
+For a fixed ticker and strike, plots put (or call) option premium against
+expiration date across all listed expirations over the next N months.
+
+```bash
+python create_premium_vs_expiration_date_given_strike_price.py --ticker QQQ --strike 580
+python create_premium_vs_expiration_date_given_strike_price.py -t AAPL -s 200 --months 6
+python create_premium_vs_expiration_date_given_strike_price.py -t QQQ --pct-of-price 55
+```
+
+Strike can be given as a fixed dollar amount (`-s/--strike`) or as a
+percentage of the current stock price (`--pct-of-price`, which snaps to the
+nearest actually-listed strike). Run with `-h` for the full option list.
+
+### `create_premium_vs_strike_given_expiration_date.py` — premium vs. strike plot
+
+For a fixed ticker and expiration (or the nearest few expirations), plots put
+or call option premium against strike price.
+
+```bash
+python create_premium_vs_strike_given_expiration_date.py
+python create_premium_vs_strike_given_expiration_date.py --ticker QQQ --expiration 2026-01-16
+python create_premium_vs_strike_given_expiration_date.py -t AAPL -e 2026-03-20 --option-type call
+python create_premium_vs_strike_given_expiration_date.py -t QQQ --num-expirations 5
+```
+
+If `-e/--expiration` is omitted, it plots the nearest few expirations
+together (`--num-expirations`, default 3) so gaps between adjacent
+expiration curves can be compared. Run with `-h` for the full option list.
+
+### `plot_from_csv.py` — offline plot from a saved CSV
+
+Standalone plotting script — no internet/API calls. Reads a CSV like the ones
+produced by the two scripts above and plots premium vs. expiration, with
+optional knee-of-the-curve and steepest-N-day-window annotations.
+
+```bash
+python plot_from_csv.py --csv QQQ_580_put_bids.csv
+python plot_from_csv.py --csv MU_600_put_asks.csv --column ask
+python plot_from_csv.py --csv data.csv --no-knee --window-days 45
+```
+
+Run with `-h` for the full option list.
+
+### `option_chain_fetcher.py` — option chain with Black-Scholes Greeks
+
+Fetches the option chain for a ticker (default: the second-nearest
+expiration) and computes Black-Scholes Greeks (Delta, Gamma, Theta, Vega,
+Rho) for every call and put using each contract's implied volatility.
+
+```bash
+python option_chain_fetcher.py AAPL
+```
+
+Prints the first 5 rows of calls and puts with their Greeks to the console.
+The risk-free rate is currently hardcoded (4.5%) in `calculate_greeks`.
+
+### `stock_earnings_report.py` — SEC EDGAR filings + EPS/revenue
+
+Pulls recent earnings-related SEC filings (10-K, 10-Q, 8-K) and structured
+XBRL facts (latest EPS, latest revenue) for a list of tickers, straight from
+SEC EDGAR's free JSON APIs (no API key). Defaults to the QQQ/Nasdaq-100
+constituents bundled in the script.
+
+```bash
+python stock_earnings_report.py
+python stock_earnings_report.py --tickers AAPL MSFT NVDA
+python stock_earnings_report.py --out stock_earnings.csv
+```
+
+SEC requires a descriptive `User-Agent` on every request — edit
+`SEC_USER_AGENT` near the top of the script to your own name/email before
+running. The script rate-limits itself to stay under SEC's 10 requests/sec
+limit. Prints a console summary per ticker and writes the full result set to
+CSV (`stock_earnings.csv` by default); pass `--no-console` to skip the
+console summary.
+
+### `generate_dashboard.py` — HTML dashboard of generated output
+
+Scans this folder for the CSV/PNG output produced by the plotting scripts
+above and builds an `index.html` dashboard that groups everything by ticker
+(with thumbnail links to heatmap/scatter images and the underlying CSV),
+plus sections for scripts and other misc files. No dependencies beyond the
+standard library.
+
+```bash
+python3 generate_dashboard.py
+```
+
+Re-run any time after generating new output to refresh `index.html`.
+
+## Notes
+
+- All scripts that hit Yahoo Finance do so via `yfinance` or plain
+  `requests` against public endpoints — no authentication, no scraping
+  library, no paid data feed.
+- Ticker universes bundled in these scripts (QQQ/Nasdaq-100 constituents) are
+  point-in-time snapshots; the index reconstitutes annually and rebalances
+  quarterly, so refresh them periodically or pass explicit tickers.
+- Nothing in this repo places trades or stores credentials — it's read-only
+  data retrieval, analysis, and plotting.
