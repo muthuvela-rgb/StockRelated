@@ -91,7 +91,17 @@ What it does:
        upward) slope with a thick green highlighted segment and a
        "slope X.XX" label — one marker per plotted expiration. Printed to
        the console too.
-    10. Saves the chart and the data (CSV) named after the ticker,
+    10. SECOND, coarser slope method: splits the strike axis from $0 to the
+       current stock price into 20 equal-width bins (each 5% of price wide)
+       and, for EACH expiration curve, finds the single bin with the
+       largest premium difference between its highest- and lowest-strike
+       point — marked with a shaded price band, a dash-dot crimson
+       connecting segment, and a "bin Δ$X.XX" label, one marker per plotted
+       expiration. Complements #9 by answering "which fixed slice of the
+       price range has the biggest premium jump" rather than "which single
+       pair of adjacent listed strikes is steepest." Printed to the console
+       too.
+    11. Saves the chart and the data (CSV) named after the ticker,
        option type, price type, and the expiration(s) used.
 
 Notes:
@@ -473,6 +483,54 @@ def main():
               f"(strike {steepest['strike_a']:g} -> {steepest['strike_b']:g}, "
               f"{price_type} ${steepest['premium_a']:.2f} -> ${steepest['premium_b']:.2f})")
 
+    # SECOND slope method: split the strike axis from $0 to the CURRENT PRICE into
+    # N_PRICE_BINS equal-width bins (each bin = current_price / N_PRICE_BINS wide,
+    # e.g. 20 bins = every 5% of price) and, for EACH expiration curve, find the
+    # single bin with the largest premium difference between its highest- and
+    # lowest-strike point (highest_strike_premium - lowest_strike_premium, for
+    # strikes that fall inside that bin). This is a coarser, fixed-width
+    # alternative to the adjacent-strike steepest-slope marker above — it answers
+    # "which fixed slice of the price range has the biggest premium jump" rather
+    # than "which single pair of adjacent listed strikes is steepest."
+    N_PRICE_BINS = 20
+
+    def widest_bin_diff(exp_df, price, n_bins=N_PRICE_BINS):
+        bin_width = price / n_bins
+        best = None
+        for i in range(n_bins):
+            lo = i * bin_width
+            hi = price if i == n_bins - 1 else (i + 1) * bin_width
+            in_bin = exp_df[(exp_df["strike"] >= lo) &
+                             (exp_df["strike"] <= hi if i == n_bins - 1 else exp_df["strike"] < hi)]
+            if len(in_bin) < 2:
+                continue
+            in_bin = in_bin.sort_values("strike")
+            first, last = in_bin.iloc[0], in_bin.iloc[-1]
+            diff = last["premium"] - first["premium"]
+            if best is None or diff > best["diff"]:
+                best = {"bin_lo": lo, "bin_hi": hi, "strike_lo": first["strike"], "strike_hi": last["strike"],
+                        "premium_lo": first["premium"], "premium_hi": last["premium"], "diff": diff}
+        return best
+
+    bin_pct = 100 / N_PRICE_BINS
+    bin_markers = []  # [{"expiration": ..., "bin_lo"/"bin_hi"/"strike_lo"/"strike_hi"/"premium_lo"/"premium_hi"/"diff": ...}]
+    if current_price is None:
+        print("\nCurrent price unavailable — skipping the "
+              f"{N_PRICE_BINS}-bin ({bin_pct:g}%-of-price) premium-difference marker.")
+    else:
+        for expiration in expirations:
+            exp_df = df[df["expiration"] == expiration].sort_values("strike")
+            widest = widest_bin_diff(exp_df, current_price)
+            if widest is None:
+                print(f"{expiration}: no {bin_pct:g}%-of-price bin (between $0 and the current "
+                      f"price) contains 2+ strikes — can't compute a bin-based premium difference.")
+                continue
+            bin_markers.append({"expiration": expiration, **widest})
+            print(f"Widest {bin_pct:g}%-of-price bin for {expiration}: "
+                  f"${widest['bin_lo']:.2f}-${widest['bin_hi']:.2f}  |  ${widest['diff']:.2f} diff "
+                  f"(strike {widest['strike_lo']:g} ${widest['premium_lo']:.2f} -> strike "
+                  f"{widest['strike_hi']:g} ${widest['premium_hi']:.2f})")
+
     # Plot: one line per expiration, sharing a single fallback-marker legend entry.
     fig, ax = plt.subplots(figsize=(12, 6))
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -560,6 +618,29 @@ def main():
         ax.plot([], [], color=SLOPE_COLOR, linewidth=4,
                 label=f"Steepest slope: {marker['slope']:.2f} $/strike "
                       f"(strike {sa:g}→{sb:g}{exp_suffix})")
+
+    # Highlight each expiration curve's widest 20-bin (5%-of-price-wide) premium
+    # difference with a shaded price band and a crimson dash-dot connecting
+    # segment/label — a color/style not used anywhere else on the chart, one
+    # marker per plotted expiration.
+    BIN_COLOR = "crimson"
+    for marker in bin_markers:
+        lo, hi = marker["bin_lo"], marker["bin_hi"]
+        sl, sh = marker["strike_lo"], marker["strike_hi"]
+        pl, ph = marker["premium_lo"], marker["premium_hi"]
+        mid_x, mid_y = (sl + sh) / 2, (pl + ph) / 2
+
+        ax.axvspan(lo, hi, color=BIN_COLOR, alpha=0.08, zorder=0)
+        ax.plot([sl, sh], [pl, ph], color=BIN_COLOR, linewidth=3,
+                linestyle="dashdot", alpha=0.9, zorder=5)
+        ax.annotate(f"bin Δ${marker['diff']:.2f}", xy=(mid_x, mid_y), xytext=(0, -16),
+                    textcoords="offset points", ha="center", color=BIN_COLOR,
+                    fontweight="bold", zorder=9)
+
+        exp_suffix = f", {marker['expiration']}" if len(expirations) > 1 else ""
+        ax.plot([], [], color=BIN_COLOR, linewidth=3, linestyle="dashdot",
+                label=f"Widest {bin_pct:g}%-of-price bin: ${marker['diff']:.2f} "
+                      f"(${lo:.0f}-${hi:.0f}{exp_suffix})")
 
     if current_price is not None:
         ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5, zorder=0,
