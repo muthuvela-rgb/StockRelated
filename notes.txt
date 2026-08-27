@@ -1,0 +1,2 @@
+#python3 stock_options_toolkit.py --pct-high 70 --pct-low 40 --no-margin --min-days 45 --max-days 90
+#python3 create_premium_vs_expiration_date_given_strike_price.py -t MU -s 490 -m 12
