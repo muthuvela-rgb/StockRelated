@@ -23,11 +23,21 @@ TECHNICALS-ONLY MODE: pass --technicals to skip the put-option scan
 entirely and just print technicals for the requested ticker(s) — see
 --technicals below and the "What it does" section.
 
+UNIVERSE MODE: pass --universe ETF_TICKER to use that ETF's full component
+holdings as the ticker list instead of -t/--ticker or the default
+watchlist (e.g. --universe SPY scans every S&P 500 constituent). Currently
+supports QQQ (via Invesco's own holdings API) and State Street SPDR ETFs
+(SPY, DIA, MDY, the SPDR sector funds, ...) — see fetch_universe_tickers()
+/ --universe below for why it isn't broader yet.
+
 Requires: yfinance, pandas
     pip install yfinance pandas
 
 Optional (for charts): matplotlib
     pip install matplotlib
+
+Optional (for --universe): requests, openpyxl
+    pip install requests openpyxl
 
 Optional (for interactive hover tooltips showing expiry/strike/premium on
 each plotted point): mplcursors
@@ -56,12 +66,29 @@ Run:
     python put_annualized_return.py --technicals -t AAPL MSFT
     python put_annualized_return.py --technicals rsi bollinger -t QQQ
     python put_annualized_return.py --technicals price,analyst-target
+    python put_annualized_return.py --universe SPY --top 20
+    python put_annualized_return.py --universe XLK --technicals rsi
 
 Options:
     -t, --ticker     One or more stock/ETF ticker symbols. Accepts
                       comma-separated ("QQQ,AAPL,MSFT") or space-separated
                       ("-t QQQ AAPL MSFT") forms. If omitted entirely, scans
                       the persisted default watchlist (see --list-tickers).
+                      Ignored if --universe is given.
+    --universe       Use an ETF's full component holdings as the ticker
+                      list instead of -t/--ticker or the default watchlist
+                      (e.g. --universe SPY scans every S&P 500
+                      constituent). Fetches the live holdings list from
+                      the ETF provider's public API/spreadsheet — no API
+                      key. Currently supports QQQ (via Invesco's own
+                      holdings API) and State Street SPDR ETFs (SPY, DIA,
+                      MDY, the SPDR sector funds
+                      XLK/XLF/XLE/XLV/XLY/XLP/XLI/XLB/XLU/XLRE/XLC, and
+                      similar); other providers/funds (iShares, Vanguard,
+                      other Invesco funds, ...) don't publish a similarly
+                      simple/stable download, and exit with a clear error
+                      rather than silently falling back to a partial
+                      list. Overrides -t/--ticker.
     --add-ticker     Add one or more tickers to the persisted default
                       watchlist (comma or space separated), save it, then
                       exit WITHOUT scanning. Combine with --remove-ticker to
@@ -287,12 +314,19 @@ Notes:
 """
 
 import argparse
+import io
 import json
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    import requests
+except ImportError:
+    requests = None  # only required for --universe; rest of the script doesn't need it
 
 try:
     import yfinance as yf
@@ -454,7 +488,16 @@ def parse_args():
                          help="One or more stock/ETF ticker symbols. Comma-separated "
                               "(\"QQQ,AAPL,MSFT\") or space-separated (\"QQQ AAPL MSFT\"). "
                               "If omitted, scans the persisted default watchlist "
-                              "(see --list-tickers, --add-ticker, --remove-ticker).")
+                              "(see --list-tickers, --add-ticker, --remove-ticker). Ignored "
+                              "if --universe is given.")
+    parser.add_argument("--universe", type=str, default=None, metavar="ETF_TICKER",
+                         help="Use an ETF's full component holdings as the ticker list instead "
+                              "of -t/--ticker or the default watchlist. Fetches the live "
+                              "holdings list for ETF_TICKER (e.g. SPY, XLK, XLF, DIA, MDY) from "
+                              "its provider's public holdings spreadsheet. Currently only State "
+                              "Street SPDR ETFs are supported (see docstring); other providers "
+                              "exit with a clear error rather than silently returning a partial "
+                              "list. Overrides -t/--ticker.")
     parser.add_argument("--add-ticker", type=str, nargs="+", default=None,
                          help="Add one or more tickers to the persisted default watchlist "
                               "(comma or space separated), save it, then exit without scanning.")
@@ -560,6 +603,137 @@ def parse_technicals_fields(raw_fields):
             requested.add(piece)
 
     return [f for f in TECHNICALS_FIELD_ORDER if f in requested]
+
+
+# --universe: base URL for State Street's public per-ETF daily holdings
+# spreadsheet (no API key). {ticker} is the ETF's ticker, lowercased.
+_SPDR_HOLDINGS_URL = (
+    "https://www.ssga.com/us/en/intermediary/library-content/products/"
+    "fund-data/etfs/us/holdings-daily-us-en-{ticker}.xlsx"
+)
+_TICKER_RE = r"^[A-Z]{1,5}(\.[A-Z])?$"  # real US equity ticker, e.g. AAPL, BF.B — rejects
+                                        # internal identifiers some funds hold odd positions under
+
+
+def fetch_spdr_holdings(etf_ticker):
+    """
+    Fetch the full equity holdings list for a State Street SPDR ETF from
+    their public daily holdings spreadsheet (SPY, DIA, MDY, the SPDR
+    sector funds, and similar) — no API key, no scraping library, just an
+    XLSX download. Returns a deduplicated list of yfinance-style tickers
+    ("." replaced with "-" for share classes, e.g. "BF.B" -> "BF-B"), or
+    None if the ETF isn't an SPDR fund published this way, or the fetch/
+    parse otherwise fails.
+    """
+    if requests is None:
+        sys.exit("Missing dependency requests (needed for --universe). "
+                  "Install with:  pip install requests")
+
+    url = _SPDR_HOLDINGS_URL.format(ticker=etf_ticker.lower())
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    except Exception:
+        return None
+
+    content_type = resp.headers.get("content-type", "")
+    if resp.status_code != 200 or "spreadsheet" not in content_type:
+        return None  # 404, or an HTML page instead of the expected xlsx
+
+    try:
+        df = pd.read_excel(io.BytesIO(resp.content), header=4)
+    except ImportError:
+        sys.exit("Missing dependency openpyxl (needed for --universe to read the holdings "
+                  "spreadsheet). Install with:  pip install openpyxl")
+    except Exception:
+        return None
+
+    if "Ticker" not in df.columns:
+        return None
+
+    tickers = df["Ticker"].dropna().astype(str).str.strip()
+    tickers = tickers[tickers.str.match(_TICKER_RE)]
+    tickers = tickers.str.replace(".", "-", regex=False)
+    result = tickers.drop_duplicates().tolist()
+    return result or None
+
+
+# --universe: Invesco's own public JSON API for QQQ's full holdings — the
+# same endpoint that powers the "view all holdings" table on
+# invesco.com/qqq-etf. Found by inspecting that page's HTML for the
+# data-holding-api attribute on the all-holdings table (the top-10-only
+# widget on the same page uses this URL PLUS "&loadType=initial", which is
+# what caps it at 10 — omitting that param returns every holding).
+# NOTE: this endpoint 500s for other Invesco tickers tried (QQQM, RSP,
+# SPHQ) — it is NOT a general "any Invesco fund" endpoint, so this is
+# intentionally QQQ-specific rather than generalized to a whole provider.
+_INVESCO_QQQ_HOLDINGS_URL = (
+    "https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/QQQ/"
+    "holdings/fund?idType=ticker&interval=monthly&productType=ETF"
+)
+
+
+def fetch_invesco_qqq_holdings():
+    """
+    Fetch QQQ's full holdings list from Invesco's own public JSON API — no
+    API key. Keeps only common-stock lines (securityTypeCode == "COM"),
+    dropping the index-future/cash/collateral lines the fund also reports
+    (e.g. "NQU6" futures, "USD" cash, "CASH COLLATERAL"). Returns a
+    deduplicated list of yfinance-style tickers, or None on failure.
+    """
+    if requests is None:
+        sys.exit("Missing dependency requests (needed for --universe). "
+                  "Install with:  pip install requests")
+
+    try:
+        resp = requests.get(_INVESCO_QQQ_HOLDINGS_URL, timeout=15,
+                             headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception:
+        return None
+
+    tickers = []
+    for h in data.get("holdings", []):
+        if h.get("securityTypeCode") != "COM":
+            continue
+        ticker = h.get("ticker")
+        if ticker and re.match(_TICKER_RE, ticker) and ticker not in tickers:
+            tickers.append(ticker.replace(".", "-"))
+
+    return tickers or None
+
+
+def fetch_universe_tickers(etf_ticker):
+    """
+    Resolve --universe ETF_TICKER to its full list of component tickers.
+
+    Supports:
+      - QQQ specifically, via Invesco's own public holdings API
+        (fetch_invesco_qqq_holdings()).
+      - State Street SPDR equity ETFs (SPY, DIA, MDY, and the SPDR sector
+        funds XLK/XLF/XLE/XLV/XLY/XLP/XLI/XLB/XLU/XLRE/XLC, among others),
+        via fetch_spdr_holdings().
+    Other providers/tickers (iShares, Vanguard, other Invesco funds, ...)
+    don't publish a similarly simple/stable public download and aren't
+    supported yet — this exits with a clear error rather than silently
+    falling back to a partial (e.g. top-10-only) list.
+    """
+    if etf_ticker == "QQQ":
+        tickers = fetch_invesco_qqq_holdings()
+    else:
+        tickers = fetch_spdr_holdings(etf_ticker)
+
+    if not tickers:
+        sys.exit(
+            f"Could not fetch full holdings for '{etf_ticker}'. --universe currently "
+            f"supports QQQ (via Invesco's own holdings API) and State Street SPDR ETFs "
+            f"(e.g. SPY, DIA, MDY, XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLB, XLU, XLRE, XLC) "
+            f"via their public holdings spreadsheet. Other providers/funds (iShares, "
+            f"Vanguard, other Invesco funds, ...) aren't supported. Pass explicit tickers "
+            f"with -t/--ticker instead."
+        )
+    return tickers
 
 
 def manage_watchlist(args):
@@ -1360,8 +1534,14 @@ def main():
         sys.exit("Missing dependency yfinance (needed to run a scan). "
                   "Install with:  pip install yfinance pandas")
 
-    raw_tickers = args.ticker if args.ticker is not None else load_default_tickers()
-    tickers = parse_ticker_list(raw_tickers)
+    if args.universe:
+        universe_ticker = args.universe.upper()
+        tickers = fetch_universe_tickers(universe_ticker)
+        preview = ", ".join(tickers[:10]) + (", ..." if len(tickers) > 10 else "")
+        print(f"Universe from {universe_ticker} holdings: {len(tickers)} ticker(s) — {preview}")
+    else:
+        raw_tickers = args.ticker if args.ticker is not None else load_default_tickers()
+        tickers = parse_ticker_list(raw_tickers)
 
     if not tickers:
         sys.exit("No valid tickers provided.")
