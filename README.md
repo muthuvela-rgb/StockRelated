@@ -194,11 +194,15 @@ the full option list (`--min-days`, `--max-days`, `--strike`, `--pct-low`,
 Saves a per-ticker CSV/chart plus a combined CSV and chart across all
 tickers scanned. Per-ticker chart type depends on the scan: single-strike
 mode plots annualized return vs. expiration; band mode with 2+ tickers
-plots a strike x expiration heatmap; **band mode with exactly one ticker**
-plots actual bid premium ($) vs. actual strike price ($) instead, one line
-per expiration — hovering a point shows its expiration date, strike, and
-bid/ask (interactive hover needs `mplcursors` and a live matplotlib
-window; has no effect on the saved PNG).
+plots a strike x expiration heatmap. **Band mode with exactly one
+ticker** is a special case: it plots actual bid premium ($) vs. actual
+strike price ($) instead, one line per expiration — hovering a point
+shows its expiration date, strike, and bid/ask (interactive hover needs
+`mplcursors` and a live matplotlib window; has no effect on the saved
+PNG). That chart also pops up interactively when it's done (like the
+combined chart does for multi-ticker runs), and the redundant
+combined-across-tickers chart is skipped in this single-ticker case
+since it would just duplicate the same data on different axes.
 
 **Technicals-only mode (`--technicals`)** skips the put-option scan entirely
 and just reports technicals for the requested ticker(s):
