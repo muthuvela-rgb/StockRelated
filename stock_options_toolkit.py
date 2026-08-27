@@ -479,6 +479,45 @@ def attach_point_hover(mplcursors_mod, artist, df_subset, premium_col, value_col
             bbox.set(fc="lightyellow", alpha=0.95)
 
 
+def attach_strike_premium_hover(mplcursors_mod, artist, df_subset, plotted_premium):
+    """
+    Attach a hover tooltip to a premium-vs-strike line/scatter artist (see
+    the single-ticker band-mode chart in process_ticker()), showing the
+    expiration date, strike, and premium/bid/ask for whichever point the
+    cursor is over. df_subset and plotted_premium must be in the same row
+    order as the data passed to the artist (positional index alignment).
+    No-ops silently if mplcursors_mod is None (not installed) or df_subset
+    is empty.
+    """
+    if mplcursors_mod is None or df_subset.empty:
+        return
+    df_subset = df_subset.reset_index(drop=True)
+    plotted_premium = pd.Series(plotted_premium).reset_index(drop=True)
+    cursor = mplcursors_mod.cursor(artist, hover=True)
+
+    @cursor.connect("add")
+    def _(sel):
+        idx = sel.index
+        if isinstance(idx, tuple):
+            idx = idx[0]
+        idx = int(round(idx))
+        idx = max(0, min(idx, len(df_subset) - 1))
+        row = df_subset.iloc[idx]
+        text = (
+            f"Expiry: {row['expiration']}\n"
+            f"Strike: {row['strike']:g}\n"
+            f"Premium: ${plotted_premium.iloc[idx]:.2f}\n"
+            f"Bid: ${row['bid']:.2f}\n"
+            f"Ask: ${row['ask']:.2f}"
+        )
+        if row.get("bid_used_fallback"):
+            text += "\n(premium used lastPrice — bid/ask were 0)"
+        sel.annotation.set_text(text)
+        bbox = sel.annotation.get_bbox_patch()
+        if bbox is not None:
+            bbox.set(fc="lightyellow", alpha=0.95)
+
+
 def attach_heatmap_hover(fig, ax, pivot_value, pivot_premium, value_label):
     """
     Attach a custom hover tooltip to a heatmap (imshow) axis, showing
@@ -1296,11 +1335,18 @@ def run_technicals_mode(tickers, fields):
     print(pd.DataFrame(rows).to_string(index=False))
 
 
-def process_ticker(ticker, args):
+def process_ticker(ticker, args, single_ticker_run=False):
     """
     Run the full scan for one ticker: fetch price/expirations, pull the put
     chain (band or single-strike mode), compute annualized returns, save
     that ticker's own CSV/chart, print its top rows and snapshot.
+
+    single_ticker_run: True when this is the only ticker in the whole scan
+    (len(tickers) == 1) — in BAND MODE, this switches the per-ticker chart
+    from the strike x expiration heatmap to a premium-vs-strike plot (see
+    the plotting section below), since a heatmap's main value is comparing
+    many strikes/expirations at a glance, which matters less with only one
+    ticker's data on the page.
 
     Returns (df, snapshot) — the ticker's result DataFrame and its snapshot
     dict (see gather_snapshot) — or (None, None) if nothing could be fetched
@@ -1504,7 +1550,13 @@ def process_ticker(ticker, args):
             return df, snapshot
 
         mplcursors_mod = try_import_mplcursors()
-        out_png = out_csv.rsplit(".", 1)[0] + ("_lineplot.png" if single_strike_mode else "_heatmap.png")
+        if single_strike_mode:
+            chart_suffix = "_lineplot.png"
+        elif single_ticker_run:
+            chart_suffix = "_premium_vs_strike.png"
+        else:
+            chart_suffix = "_heatmap.png"
+        out_png = out_csv.rsplit(".", 1)[0] + chart_suffix
 
         if single_strike_mode:
             df_sorted = df.sort_values("expiration").reset_index(drop=True)
@@ -1543,6 +1595,48 @@ def process_ticker(ticker, args):
             fig.suptitle(f"{ticker} {args.strike:g} Strike Put — Annualized Return by Expiration "
                          f"(Current price: ${current_price:.2f})")
             plt.tight_layout()
+        elif single_ticker_run:
+            # Only one ticker in this whole scan (band mode): plot the actual bid
+            # premium against the actual strike price, one line per expiration,
+            # hovering a point shows which expiration it belongs to. A heatmap's
+            # value is comparing many strikes/expirations at a glance across the
+            # margin/cash-secured bases; with a single ticker, seeing the raw
+            # premium curve per expiration is usually more useful.
+            fig, ax = plt.subplots(figsize=(12, 7))
+            color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+            fallback_labeled = False
+
+            for i, exp in enumerate(sorted(df["expiration"].unique())):
+                exp_df = df[df["expiration"] == exp].sort_values("strike").reset_index(drop=True)
+                if exp_df.empty:
+                    continue
+                # "bid" is the raw quote (often 0 for thin/OTM contracts); wherever
+                # bid_used_fallback is set, the annualized-return calc substituted
+                # last_price instead — plot that same fallback-adjusted value here
+                # too, so the chart doesn't show a flat $0 line for those points.
+                plot_premium = exp_df["bid"].where(~exp_df["bid_used_fallback"], exp_df["last_price"])
+
+                color = color_cycle[i % len(color_cycle)]
+                line, = ax.plot(exp_df["strike"], plot_premium, marker="o", linewidth=1.5,
+                                 color=color, label=exp)
+                attach_strike_premium_hover(mplcursors_mod, line, exp_df, plot_premium)
+
+                fb_mask = exp_df["bid_used_fallback"]
+                if fb_mask.any():
+                    ax.scatter(exp_df.loc[fb_mask, "strike"], plot_premium[fb_mask],
+                               marker="^", s=90, color="tab:orange",
+                               edgecolors="black", linewidths=0.8, zorder=5,
+                               label=None if fallback_labeled else "Bid used lastPrice")
+                    fallback_labeled = True
+
+            ax.axvline(current_price, color="gray", linestyle=":", linewidth=1.5,
+                       label=f"Current price (${current_price:.2f})")
+            ax.set_xlabel("Strike Price ($)")
+            ax.set_ylabel("Put Bid Premium ($)")
+            ax.set_title(f"{ticker} Put Bid Premium by Strike (Current price: ${current_price:.2f})")
+            ax.grid(True, alpha=0.3)
+            ax.legend(title="Expiration", bbox_to_anchor=(1.02, 1), loc="upper left")
+            plt.tight_layout()
         else:
             fig, (ax_m, ax_c) = plt.subplots(1, 2, figsize=(20, max(6, df["strike"].nunique() * 0.35 + 2)))
             panels = [
@@ -1574,6 +1668,13 @@ def process_ticker(ticker, args):
 
         plt.savefig(out_png, dpi=150)
         print(f"Saved chart to {out_png}")
+        if single_ticker_run and not single_strike_mode:
+            # Only one ticker in the whole scan and nothing else left to plot
+            # afterward (the redundant combined-across-tickers chart is skipped
+            # in this case — see main()) — pop up this chart interactively
+            # instead of just saving it silently, same as the combined chart
+            # does at the end of a multi-ticker run.
+            plt.show()
         plt.close(fig)
 
     return df, snapshot
@@ -1620,7 +1721,7 @@ def main():
     all_snapshots = []
     skipped = []
     for ticker in tickers:
-        df, snapshot = process_ticker(ticker, args)
+        df, snapshot = process_ticker(ticker, args, single_ticker_run=(len(tickers) == 1))
         if df is not None:
             all_dfs.append(df)
             all_snapshots.append(snapshot)
@@ -1680,7 +1781,15 @@ def main():
     summary_df = pd.DataFrame(summary_rows)
     print(summary_df.to_string(index=False))
 
-    if not args.no_plot:
+    if not args.no_plot and len(tickers) == 1:
+        # This "combined across all tickers" chart (moneyness % vs. annualized
+        # return %) is redundant with the single ticker's own per-ticker chart
+        # from process_ticker() — which, in band mode, is the actual-premium-
+        # vs-actual-strike chart with per-point expiration hover — so skip it
+        # rather than saving a second, differently-axised chart for one ticker.
+        print("\nOnly one ticker was scanned — skipping the combined-across-tickers "
+              "plot (see that ticker's own chart above).")
+    elif not args.no_plot:
         try:
             import matplotlib.pyplot as plt
         except ImportError:
