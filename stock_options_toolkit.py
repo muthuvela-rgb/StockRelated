@@ -315,6 +315,7 @@ Notes:
 """
 
 import argparse
+import atexit
 import io
 import json
 import re
@@ -358,6 +359,60 @@ TECHNICALS_FIELD_LABELS = {
     "rsi": "RSI (14d)",
     "bollinger": "Bollinger Band Position",
 }
+
+# All console output (every mode: scan, --technicals, --universe, watchlist
+# management) is additionally captured to a timestamped file under here.
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+
+
+class _TeeStdout:
+    """
+    File-like object that writes everything to both the real stdout and a
+    log file, so every print() this script makes is captured to disk
+    without having to touch any individual print call. See
+    setup_console_logging().
+    """
+
+    def __init__(self, stream, log_file):
+        self._stream = stream
+        self._log_file = log_file
+
+    def write(self, data):
+        self._stream.write(data)
+        self._log_file.write(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._log_file.flush()
+
+    def isatty(self):
+        return self._stream.isatty()
+
+
+def setup_console_logging():
+    """
+    Tee all stdout to a timestamped file under LOG_DIR, in addition to the
+    terminal. Every run gets its own file (timestamped to the second) —
+    log files are never overwritten or appended to, so every past run's
+    full console output is preserved. Registers cleanup (restoring
+    sys.stdout and closing the file) via atexit so it runs regardless of
+    which code path the script exits through (normal return, sys.exit()
+    from any mode, or an uncaught exception).
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / f"stock_options_toolkit_{timestamp}.log"
+    log_file = open(log_path, "w")
+
+    original_stdout = sys.stdout
+    sys.stdout = _TeeStdout(original_stdout, log_file)
+
+    def _restore():
+        sys.stdout = original_stdout
+        log_file.close()
+
+    atexit.register(_restore)
+    print(f"Logging full console output to {log_path}")
 
 
 def load_default_tickers():
@@ -1525,6 +1580,7 @@ def process_ticker(ticker, args):
 
 
 def main():
+    setup_console_logging()
     args = parse_args()
 
     if args.add_ticker or args.remove_ticker or args.list_tickers:

@@ -229,6 +229,11 @@ download and exit with a clear error rather than silently returning a
 partial (e.g. top-10-only) list — pass explicit tickers with `-t/--ticker`
 for those instead. Combines with `--technicals` or the default scan mode.
 
+**Every run's full console output is also logged** to a timestamped file
+under `logs/` (e.g. `logs/stock_options_toolkit_20260826_224027.log`), in
+addition to the terminal. Each run gets its own file — nothing is ever
+overwritten or appended to, so every past run's complete output is kept.
+
 ### `short_dated_put_screener.py` — top short-dated puts by annualized return
 
 Scans a universe of stocks/ETFs (by default the QQQ / Nasdaq-100
@@ -388,3 +393,5 @@ Re-run any time after generating new output to refresh `index.html`.
   quarterly, so refresh them periodically or pass explicit tickers.
 - Nothing in this repo places trades or stores credentials — it's read-only
   data retrieval, analysis, and plotting.
+- [notes.txt](notes.txt) has a few example commands (commented out) for
+  quick copy-paste reference — not runnable as a script itself.
