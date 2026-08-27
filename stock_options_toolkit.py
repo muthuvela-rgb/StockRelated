@@ -1,7 +1,8 @@
 """
-Put Option Chain — Annualized Return Scanner (multi-ticker, portfolio-margin aware)
+Stock Options Toolkit — put annualized-return scanner, technicals, and ETF
+universe expansion (multi-ticker, portfolio-margin aware)
 -----------------------------------------------------------------------------
-For one or more stocks/ETFs, pulls every option expiration whose days-to-
+By default, for one or more stocks/ETFs, pulls every option expiration whose days-to-
 expiration falls within a configurable [--min-days, --max-days] window
 (default 0-365 days out), and for each expiration, pulls every PUT strike within
 a percentage band of the current stock price (or one specific strike, with
@@ -47,27 +48,27 @@ script locally with plt.show() popping up a window) — it has no effect on
 the saved PNG files themselves, which are static images.
 
 Run:
-    python put_annualized_return.py
-    python put_annualized_return.py --ticker QQQ
-    python put_annualized_return.py --ticker QQQ,AAPL,MSFT,NVDA
-    python put_annualized_return.py -t QQQ AAPL MSFT --top 20
-    python put_annualized_return.py -t AAPL --max-days 180
-    python put_annualized_return.py -t AAPL --min-days 30 --max-days 90
-    python put_annualized_return.py -t QQQ --pct-low 50 --pct-high 90
-    python put_annualized_return.py -t QQQ --strike 580
-    python put_annualized_return.py -t QQQ,AAPL --no-plot
-    python put_annualized_return.py -t QQQ --output my_scan.csv
-    python put_annualized_return.py -t QQQ --no-margin
-    python put_annualized_return.py -t QQQ --margin-shock-pct 10
-    python put_annualized_return.py -t QQQ --margin-floor-pct 7.5
-    python put_annualized_return.py --add-ticker AAPL,GOOGL
-    python put_annualized_return.py --remove-ticker SPCX
-    python put_annualized_return.py --list-tickers
-    python put_annualized_return.py --technicals -t AAPL MSFT
-    python put_annualized_return.py --technicals rsi bollinger -t QQQ
-    python put_annualized_return.py --technicals price,analyst-target
-    python put_annualized_return.py --universe SPY --top 20
-    python put_annualized_return.py --universe XLK --technicals rsi
+    python stock_options_toolkit.py
+    python stock_options_toolkit.py --ticker QQQ
+    python stock_options_toolkit.py --ticker QQQ,AAPL,MSFT,NVDA
+    python stock_options_toolkit.py -t QQQ AAPL MSFT --top 20
+    python stock_options_toolkit.py -t AAPL --max-days 180
+    python stock_options_toolkit.py -t AAPL --min-days 30 --max-days 90
+    python stock_options_toolkit.py -t QQQ --pct-low 50 --pct-high 90
+    python stock_options_toolkit.py -t QQQ --strike 580
+    python stock_options_toolkit.py -t QQQ,AAPL --no-plot
+    python stock_options_toolkit.py -t QQQ --output my_scan.csv
+    python stock_options_toolkit.py -t QQQ --no-margin
+    python stock_options_toolkit.py -t QQQ --margin-shock-pct 10
+    python stock_options_toolkit.py -t QQQ --margin-floor-pct 7.5
+    python stock_options_toolkit.py --add-ticker AAPL,GOOGL
+    python stock_options_toolkit.py --remove-ticker SPCX
+    python stock_options_toolkit.py --list-tickers
+    python stock_options_toolkit.py --technicals -t AAPL MSFT
+    python stock_options_toolkit.py --technicals rsi bollinger -t QQQ
+    python stock_options_toolkit.py --technicals price,analyst-target
+    python stock_options_toolkit.py --universe SPY --top 20
+    python stock_options_toolkit.py --universe XLK --technicals rsi
 
 Options:
     -t, --ticker     One or more stock/ETF ticker symbols. Accepts

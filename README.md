@@ -159,23 +159,29 @@ offline against fake data:
 pytest
 ```
 
-### `put_annualized_return_wrapper.py` — multi-ticker put annualized-return scanner
+### `stock_options_toolkit.py` — put annualized-return scanner, technicals, and ETF universe expansion
 
-For one or more stocks/ETFs, pulls every option expiration whose days-to-
-expiration falls within a `--min-days`/`--max-days` window (default 0-365
-days out), and for each expiration, scans every put strike within a
-percentage band of the current price (or one specific `--strike`), computing
-an annualized return from both the bid and ask premium — using an
-approximated portfolio-margin capital basis by default (`--no-margin` for
-cash-secured/full-strike instead). With multiple tickers, results are
-combined and the top rows across all of them are printed together.
+A multi-ticker, multi-mode toolkit built around a persisted watchlist. By
+default it scans put options; `--technicals` and `--universe` switch it to
+other jobs entirely, all sharing the same ticker-selection and watchlist
+machinery.
+
+**Default mode — put annualized-return scan:** pulls every option
+expiration whose days-to-expiration falls within a `--min-days`/`--max-days`
+window (default 0-365 days out), and for each expiration, scans every put
+strike within a percentage band of the current price (or one specific
+`--strike`), computing an annualized return from both the bid and ask
+premium — using an approximated portfolio-margin capital basis by default
+(`--no-margin` for cash-secured/full-strike instead). With multiple tickers,
+results are combined and the top rows across all of them are printed
+together.
 
 ```bash
-python put_annualized_return_wrapper.py
-python put_annualized_return_wrapper.py --ticker QQQ,AAPL,MSFT
-python put_annualized_return_wrapper.py -t QQQ --min-days 30 --max-days 90
-python put_annualized_return_wrapper.py -t QQQ --strike 580
-python put_annualized_return_wrapper.py -t QQQ --pct-low 50 --pct-high 90
+python stock_options_toolkit.py
+python stock_options_toolkit.py --ticker QQQ,AAPL,MSFT
+python stock_options_toolkit.py -t QQQ --min-days 30 --max-days 90
+python stock_options_toolkit.py -t QQQ --strike 580
+python stock_options_toolkit.py -t QQQ --pct-low 50 --pct-high 90
 ```
 
 If `-t/--ticker` is omitted, it scans a persisted default watchlist stored
@@ -192,9 +198,9 @@ tickers scanned.
 and just reports technicals for the requested ticker(s):
 
 ```bash
-python put_annualized_return_wrapper.py --technicals -t AAPL MSFT
-python put_annualized_return_wrapper.py --technicals rsi bollinger -t QQQ
-python put_annualized_return_wrapper.py --technicals price,analyst-target
+python stock_options_toolkit.py --technicals -t AAPL MSFT
+python stock_options_toolkit.py --technicals rsi bollinger -t QQQ
+python stock_options_toolkit.py --technicals price,analyst-target
 ```
 
 Fields are user-configurable — pick any subset (comma or space separated)
@@ -203,6 +209,25 @@ from `price`, `52w-range`, `analyst-target`, `ath`, `market-cap`, `rsi`,
 one block per ticker, then a single consolidated table across every
 ticker at the end — sorted ascending by RSI when `rsi` is included,
 otherwise in request order.
+
+**ETF universe expansion (`--universe`)** replaces `-t/--ticker`/the
+watchlist with an ETF's full component holdings, fetched live (no API key)
+— e.g. scan every S&P 500 or QQQ constituent in one shot:
+
+```bash
+python stock_options_toolkit.py --universe SPY --top 20
+python stock_options_toolkit.py --universe QQQ --technicals rsi
+python stock_options_toolkit.py --universe XLK --strike 200
+```
+
+Currently supports **QQQ** (via Invesco's own holdings API) and **State
+Street SPDR ETFs** (SPY, DIA, MDY, and the SPDR sector funds
+XLK/XLF/XLE/XLV/XLY/XLP/XLI/XLB/XLU/XLRE/XLC, among others) via their
+public holdings spreadsheet. Other providers (iShares, Vanguard, other
+Invesco funds, ...) don't publish a similarly simple/stable public
+download and exit with a clear error rather than silently returning a
+partial (e.g. top-10-only) list — pass explicit tickers with `-t/--ticker`
+for those instead. Combines with `--technicals` or the default scan mode.
 
 ### `short_dated_put_screener.py` — top short-dated puts by annualized return
 
