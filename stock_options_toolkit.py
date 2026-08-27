@@ -65,8 +65,10 @@ Run:
     python stock_options_toolkit.py --remove-ticker SPCX
     python stock_options_toolkit.py --list-tickers
     python stock_options_toolkit.py --technicals -t AAPL MSFT
+    python stock_options_toolkit.py --technicals -t AAPL   # single ticker: adds iv/stddev/fibonacci
     python stock_options_toolkit.py --technicals rsi bollinger -t QQQ
     python stock_options_toolkit.py --technicals price,analyst-target
+    python stock_options_toolkit.py --technicals fibonacci -t AAPL
     python stock_options_toolkit.py --universe SPY --top 20
     python stock_options_toolkit.py --universe XLK --technicals rsi
 
@@ -104,9 +106,10 @@ Options:
                       omitted), then exit. Optionally list which fields to
                       include (comma or space separated) from: price,
                       52w-range, analyst-target, ath, market-cap, rsi,
-                      bollinger. Default when no fields are given: all of
-                      them, always printed in that fixed order regardless
-                      of the order given on the CLI.
+                      bollinger, iv, stddev, fibonacci — always printed in
+                      that fixed order regardless of the order given on
+                      the CLI. Default when no fields are given: all of
+                      them, for any number of tickers.
     --min-days       Minimum days to expiration to include (default: 0, i.e.
                       no lower bound beyond excluding already-expired
                       contracts).
@@ -167,6 +170,19 @@ What --technicals does (instead of the numbered flow below):
                          upper band / upper half / lower half / below
                          lower band), and an explicit below-lower-band
                          Yes/No
+        iv               ~30-day at-the-money IMPLIED volatility (from the
+                         nearest listed expiration's option chain) —
+                         market's forward-looking volatility estimate
+        stddev           annualized standard deviation of daily returns
+                         over ~3 months (HISTORICAL/realized volatility) —
+                         a backward-looking complement to iv. Reported two
+                         ways: as a % (standard 252-trading-day
+                         convention) and in dollars (daily std dev scaled
+                         by sqrt(365) CALENDAR days and applied to the
+                         most recent close — an approximate 1-standard-
+                         deviation dollar move over a year)
+        fibonacci        Fibonacci retracement levels (0%, 23.6%, 38.2%,
+                         50%, 61.8%, 100%) between the 52-week low and high
     Any field Yahoo doesn't provide is shown as N/A rather than guessed.
 
 What it does, per ticker (normal scan mode):
@@ -349,7 +365,10 @@ WATCHLIST_FILE = Path(__file__).resolve().parent / "watchlist.json"
 
 # Fields selectable via --technicals, in the fixed order they're always
 # printed regardless of the order given on the CLI.
-TECHNICALS_FIELD_ORDER = ["price", "52w-range", "analyst-target", "ath", "market-cap", "rsi", "bollinger"]
+TECHNICALS_FIELD_ORDER = [
+    "price", "52w-range", "analyst-target", "ath", "market-cap", "rsi", "bollinger",
+    "iv", "stddev", "fibonacci",
+]
 TECHNICALS_FIELD_LABELS = {
     "price": "Current Price",
     "52w-range": "52-Week High/Low",
@@ -358,7 +377,11 @@ TECHNICALS_FIELD_LABELS = {
     "market-cap": "Market Cap",
     "rsi": "RSI (14d)",
     "bollinger": "Bollinger Band Position",
+    "iv": "Implied Volatility",
+    "stddev": "Std Dev (Historical Vol)",
+    "fibonacci": "Fibonacci Levels",
 }
+FIBONACCI_RATIOS = [0.0, 0.236, 0.382, 0.5, 0.618, 1.0]
 
 # All console output (every mode: scan, --technicals, --universe, watchlist
 # management) is additionally captured to a timestamped file under here.
@@ -680,8 +703,9 @@ def parse_technicals_fields(raw_fields):
     Validate and flatten the --technicals field arguments (comma or space
     separated, case-insensitive, "_"/"-" interchangeable) into a list using
     the fixed TECHNICALS_FIELD_ORDER, regardless of the order given on the
-    CLI. Empty/None input (bare --technicals) means "all fields". Exits with
-    a helpful error listing valid keys on an unrecognized field name.
+    CLI. Empty/None input (bare --technicals) means all of
+    TECHNICALS_FIELD_ORDER, for any number of tickers. Exits with a
+    helpful error listing valid keys on an unrecognized field name.
     """
     if not raw_fields:
         return list(TECHNICALS_FIELD_ORDER)
@@ -1111,6 +1135,76 @@ def get_bollinger_position(ticker_obj):
         return None
 
 
+def get_technicals_iv(ticker_obj):
+    """
+    Fetch ~30-day at-the-money implied volatility for --technicals' iv
+    field, reusing get_atm_iv() against the nearest listed expiration
+    (ticker_obj.options is already sorted ascending by Yahoo). Returns
+    (iv_pct, expiration) — either may be None on failure.
+    """
+    try:
+        current_price = get_current_price(ticker_obj)
+    except SystemExit:
+        return None, None
+    try:
+        expirations = list(ticker_obj.options)
+    except Exception:
+        expirations = []
+    return get_atm_iv(ticker_obj, expirations, current_price)
+
+
+def get_historical_volatility(ticker_obj, period="3mo"):
+    """
+    Fetch ~3 months of daily closes and compute the annualized standard
+    deviation of daily returns (historical/realized volatility) — a
+    backward-looking complement to the --technicals iv field, which is
+    market-implied (forward-looking). Returns (annualized_pct,
+    annualized_dollars):
+      - annualized_pct: annualized std dev as a percentage, using the
+        standard 252-trading-day convention.
+      - annualized_dollars: the same standard deviation in dollars —
+        daily std dev scaled by sqrt(365) (365 CALENDAR days, per user
+        request, rather than 252 trading days) and applied to the most
+        recent close — i.e. an approximate 1-standard-deviation dollar
+        move over a year.
+    Either value is None on failure (e.g. not enough price history).
+    """
+    try:
+        hist = ticker_obj.history(period=period)
+        closes = hist["Close"]
+        if len(closes) < 2:
+            return None, None
+        daily_returns = closes.pct_change().dropna()
+        if daily_returns.empty:
+            return None, None
+        daily_std = daily_returns.std()
+        if pd.isna(daily_std):
+            return None, None
+
+        annualized_pct = float(daily_std * (252 ** 0.5) * 100)
+
+        last_close = closes.iloc[-1]
+        annualized_dollars = (float(daily_std * (365 ** 0.5) * last_close)
+                               if pd.notna(last_close) else None)
+
+        return annualized_pct, annualized_dollars
+    except Exception:
+        return None, None
+
+
+def get_fibonacci_levels(ticker_obj):
+    """
+    Compute Fibonacci retracement levels (0%/23.6%/38.2%/50%/61.8%/100%,
+    see FIBONACCI_RATIOS) between the 52-week low and high, for
+    --technicals' fibonacci field. Returns a dict {ratio: price level}, or
+    None if the 52-week range is unavailable.
+    """
+    high, low = get_52week_range(ticker_obj)
+    if high is None or low is None:
+        return None
+    return {ratio: low + (high - low) * ratio for ratio in FIBONACCI_RATIOS}
+
+
 def format_market_cap(market_cap):
     if not market_cap:
         return "N/A"
@@ -1203,6 +1297,15 @@ def gather_technicals(ticker_obj, fields):
     if "bollinger" in fields:
         data["bollinger"] = get_bollinger_position(ticker_obj)
 
+    if "iv" in fields:
+        data["iv"], data["iv_expiry"] = get_technicals_iv(ticker_obj)
+
+    if "stddev" in fields:
+        data["stddev"], data["stddev_dollar"] = get_historical_volatility(ticker_obj)
+
+    if "fibonacci" in fields:
+        data["fibonacci"] = get_fibonacci_levels(ticker_obj)
+
     return data
 
 
@@ -1252,6 +1355,29 @@ def print_technicals_report(ticker, data, fields):
                 below = "Yes" if bb.percent_b < 0 else "No"
                 print(f"{label:<28}%B {bb.percent_b:.2f} ({bb.zone}) | Below lower band: {below}")
 
+        elif key == "iv":
+            iv, iv_exp = data.get("iv"), data.get("iv_expiry")
+            if iv is None:
+                print(f"{label:<28}N/A")
+            else:
+                exp_str = f" (ATM, {iv_exp} expiry)" if iv_exp else ""
+                print(f"{label:<28}{iv:.1f}%{exp_str}")
+
+        elif key == "stddev":
+            pct, dollars = data.get("stddev"), data.get("stddev_dollar")
+            pct_str = f"{pct:.1f}% (annualized, 252d)" if pct is not None else "N/A"
+            dollars_str = f" | ±${dollars:.2f}/yr (365d basis)" if dollars is not None else ""
+            print(f"{label:<28}{pct_str}{dollars_str}")
+
+        elif key == "fibonacci":
+            levels = data.get("fibonacci")
+            if not levels:
+                print(f"{label:<28}N/A")
+            else:
+                print(label)
+                for ratio in FIBONACCI_RATIOS:
+                    print(f"  {ratio * 100:>5.1f}%:  ${levels[ratio]:.2f}")
+
     print(f"{'='*60}")
 
 
@@ -1293,6 +1419,20 @@ def build_technicals_row(ticker, data, fields):
         bb = data.get("bollinger")
         row["BB %B (Zone)"] = f"{bb.percent_b:.2f} ({bb.zone})" if bb is not None else "N/A"
         row["Below Lower Band"] = ("Yes" if bb.percent_b < 0 else "No") if bb is not None else "N/A"
+
+    if "iv" in fields:
+        iv = data.get("iv")
+        row["IV%"] = f"{iv:.1f}%" if iv is not None else "N/A"
+
+    if "stddev" in fields:
+        sd, sd_dollar = data.get("stddev"), data.get("stddev_dollar")
+        row["Std Dev%"] = f"{sd:.1f}%" if sd is not None else "N/A"
+        row["Std Dev $/yr"] = f"±${sd_dollar:.2f}" if sd_dollar is not None else "N/A"
+
+    if "fibonacci" in fields:
+        levels = data.get("fibonacci")
+        for ratio in FIBONACCI_RATIOS:
+            row[f"Fib {ratio * 100:g}%"] = f"${levels[ratio]:.2f}" if levels else "N/A"
 
     return row
 

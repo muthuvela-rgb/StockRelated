@@ -211,14 +211,24 @@ and just reports technicals for the requested ticker(s):
 python stock_options_toolkit.py --technicals -t AAPL MSFT
 python stock_options_toolkit.py --technicals rsi bollinger -t QQQ
 python stock_options_toolkit.py --technicals price,analyst-target
+python stock_options_toolkit.py --technicals fibonacci -t AAPL
 ```
 
 Fields are user-configurable — pick any subset (comma or space separated)
 from `price`, `52w-range`, `analyst-target`, `ath`, `market-cap`, `rsi`,
-`bollinger`; bare `--technicals` (no fields) reports all of them. Prints
-one block per ticker, then a single consolidated table across every
-ticker at the end — sorted ascending by RSI when `rsi` is included,
-otherwise in request order.
+`bollinger`, `iv`, `stddev`, `fibonacci`. Bare `--technicals` (no fields)
+reports all of them, for any number of tickers. `iv` is ~30-day at-the-
+money implied volatility from the option chain. `stddev` is the
+annualized standard deviation of daily returns over ~3 months (historical/
+realized volatility, a backward-looking complement to `iv`), reported two
+ways: as a % (standard 252-trading-day convention) and in dollars (daily
+std dev scaled by √365 CALENDAR days and applied to the most recent close
+— an approximate 1-standard-deviation dollar move over a year). `fibonacci`
+is the 0%/23.6%/38.2%/50%/61.8%/100% retracement levels between the
+52-week low and high. Prints one block per ticker, then a single
+consolidated table across every ticker at the end (multi-value fields
+split into their own columns, e.g. `Fib 23.6%`, `Std Dev $/yr`) — sorted
+ascending by RSI when `rsi` is included, otherwise in request order.
 
 **ETF universe expansion (`--universe`)** replaces `-t/--ticker`/the
 watchlist with an ETF's full component holdings, fetched live (no API key)
