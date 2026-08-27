@@ -188,6 +188,22 @@ the full option list (`--min-days`, `--max-days`, `--strike`, `--pct-low`,
 Saves a per-ticker CSV/chart plus a combined CSV and chart across all
 tickers scanned.
 
+**Technicals-only mode (`--technicals`)** skips the put-option scan entirely
+and just reports technicals for the requested ticker(s):
+
+```bash
+python put_annualized_return_wrapper.py --technicals -t AAPL MSFT
+python put_annualized_return_wrapper.py --technicals rsi bollinger -t QQQ
+python put_annualized_return_wrapper.py --technicals price,analyst-target
+```
+
+Fields are user-configurable — pick any subset (comma or space separated)
+from `price`, `52w-range`, `analyst-target`, `ath`, `market-cap`, `rsi`,
+`bollinger`; bare `--technicals` (no fields) reports all of them. Prints
+one block per ticker, then a single consolidated table across every
+ticker at the end — sorted ascending by RSI when `rsi` is included,
+otherwise in request order.
+
 ### `short_dated_put_screener.py` — top short-dated puts by annualized return
 
 Scans a universe of stocks/ETFs (by default the QQQ / Nasdaq-100
