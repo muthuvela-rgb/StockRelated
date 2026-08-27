@@ -19,6 +19,10 @@ first run, seeded with SPCX, MU, SNDK, ALAB, NVDA, SKHY, META, TSLA, QQQ).
 Use --add-ticker / --remove-ticker to edit that persisted list (saved for
 all future runs), or --list-tickers to view it, without running a scan.
 
+TECHNICALS-ONLY MODE: pass --technicals to skip the put-option scan
+entirely and just print technicals for the requested ticker(s) — see
+--technicals below and the "What it does" section.
+
 Requires: yfinance, pandas
     pip install yfinance pandas
 
@@ -49,6 +53,9 @@ Run:
     python put_annualized_return.py --add-ticker AAPL,GOOGL
     python put_annualized_return.py --remove-ticker SPCX
     python put_annualized_return.py --list-tickers
+    python put_annualized_return.py --technicals -t AAPL MSFT
+    python put_annualized_return.py --technicals rsi bollinger -t QQQ
+    python put_annualized_return.py --technicals price,analyst-target
 
 Options:
     -t, --ticker     One or more stock/ETF ticker symbols. Accepts
@@ -63,6 +70,15 @@ Options:
                       watchlist, save it, then exit WITHOUT scanning.
     --list-tickers   Print the current persisted default watchlist and exit
                       WITHOUT scanning.
+    --technicals     Technicals-only mode: skip the put-option scan
+                      entirely and print ONLY technicals for the requested
+                      ticker(s) (-t/--ticker, or the default watchlist if
+                      omitted), then exit. Optionally list which fields to
+                      include (comma or space separated) from: price,
+                      52w-range, analyst-target, ath, market-cap, rsi,
+                      bollinger. Default when no fields are given: all of
+                      them, always printed in that fixed order regardless
+                      of the order given on the CLI.
     --min-days       Minimum days to expiration to include (default: 0, i.e.
                       no lower bound beyond excluding already-expired
                       contracts).
@@ -99,7 +115,33 @@ Options:
     --margin-floor   Minimum per-share margin floor in dollars (default:
                       0.375, i.e. $37.50/contract).
 
-What it does, per ticker:
+What --technicals does (instead of the numbered flow below):
+    For each requested ticker, fetches only the requested fields and prints
+    them in one block, then moves to the next ticker. After every ticker is
+    processed, prints ONE CONSOLIDATED TABLE with every successfully-
+    fetched ticker as a row (multi-value fields like 52w-range split into
+    separate columns, e.g. "52W High"/"52W Low"). When the rsi field is
+    included, that table is sorted ascending by RSI (missing RSI values
+    sort last); otherwise rows stay in the order the tickers were given.
+    No option chain is pulled, no CSV or chart is saved, and none of the
+    annualized-return/margin machinery below runs. A single bad/delisted
+    ticker is skipped with a warning rather than stopping the run, same as
+    normal scan mode.
+    Fields, and where each comes from:
+        price            current price (fast_info / .info / recent history)
+        52w-range        52-week high and low
+        analyst-target   mean analyst price target + number of analysts
+                         covering the stock, from Yahoo's financialData
+        ath              all-time high (max daily High over full history)
+        market-cap       market cap
+        rsi              14-day RSI over ~3 months of daily closes
+        bollinger        Bollinger Bands(20, 2) position: %B, zone (above
+                         upper band / upper half / lower half / below
+                         lower band), and an explicit below-lower-band
+                         Yes/No
+    Any field Yahoo doesn't provide is shown as N/A rather than guessed.
+
+What it does, per ticker (normal scan mode):
     1. Fetches the current stock price.
     2. Either:
        (a) BAND MODE (default): computes the strike band
@@ -257,12 +299,30 @@ try:
 except ImportError:
     yf = None  # only required for actual scans; --list-tickers etc. don't need it
 
+try:
+    from stock_fall_detector.technicals import compute_bollinger
+except ImportError:
+    compute_bollinger = None  # only required for --technicals bollinger; rest of the script doesn't need it
+
 
 # Seed watchlist used only the very first time the script runs (before the
 # persisted watchlist file exists). After that, WATCHLIST_FILE is the single
 # source of truth and --add-ticker/--remove-ticker modify it directly.
 DEFAULT_TICKERS_SEED = ["SPCX", "MU", "SNDK", "ALAB", "NVDA", "SKHY", "META", "TSLA", "QQQ"]
 WATCHLIST_FILE = Path(__file__).resolve().parent / "watchlist.json"
+
+# Fields selectable via --technicals, in the fixed order they're always
+# printed regardless of the order given on the CLI.
+TECHNICALS_FIELD_ORDER = ["price", "52w-range", "analyst-target", "ath", "market-cap", "rsi", "bollinger"]
+TECHNICALS_FIELD_LABELS = {
+    "price": "Current Price",
+    "52w-range": "52-Week High/Low",
+    "analyst-target": "Mean Analyst Price Target",
+    "ath": "All-Time High",
+    "market-cap": "Market Cap",
+    "rsi": "RSI (14d)",
+    "bollinger": "Bollinger Band Position",
+}
 
 
 def load_default_tickers():
@@ -404,6 +464,13 @@ def parse_args():
     parser.add_argument("--list-tickers", action="store_true",
                          help="Print the current persisted default watchlist and exit without "
                               "scanning.")
+    parser.add_argument("--technicals", type=str, nargs="*", default=None, metavar="FIELD",
+                         help="Technicals-only mode: skip the put-option scan entirely and print "
+                              "only technicals for the requested ticker(s) (-t/--ticker, or the "
+                              "default watchlist if omitted), then exit. Optionally list which "
+                              "fields to include (comma or space separated) from: " +
+                              ", ".join(TECHNICALS_FIELD_ORDER) +
+                              ". Default when no fields are given: all of them, in that order.")
     parser.add_argument("--min-days", type=int, default=0,
                          help="Minimum days to expiration to include (default: 0, i.e. no "
                               "lower bound beyond excluding already-expired contracts).")
@@ -468,6 +535,31 @@ def parse_ticker_list(raw_tickers):
             if piece and piece not in tickers:
                 tickers.append(piece)
     return tickers
+
+
+def parse_technicals_fields(raw_fields):
+    """
+    Validate and flatten the --technicals field arguments (comma or space
+    separated, case-insensitive, "_"/"-" interchangeable) into a list using
+    the fixed TECHNICALS_FIELD_ORDER, regardless of the order given on the
+    CLI. Empty/None input (bare --technicals) means "all fields". Exits with
+    a helpful error listing valid keys on an unrecognized field name.
+    """
+    if not raw_fields:
+        return list(TECHNICALS_FIELD_ORDER)
+
+    requested = set()
+    for token in raw_fields:
+        for piece in token.split(","):
+            piece = piece.strip().lower().replace("_", "-")
+            if not piece:
+                continue
+            if piece not in TECHNICALS_FIELD_LABELS:
+                valid = ", ".join(TECHNICALS_FIELD_ORDER)
+                sys.exit(f"Unknown --technicals field '{piece}'. Valid fields: {valid}")
+            requested.add(piece)
+
+    return [f for f in TECHNICALS_FIELD_ORDER if f in requested]
 
 
 def manage_watchlist(args):
@@ -707,6 +799,49 @@ def get_next_earnings_date(ticker_obj):
     return None
 
 
+def get_all_time_high(ticker_obj):
+    """
+    Fetch the all-time high price from the full available daily price
+    history. Uses auto_adjust=False (raw traded prices) so this is
+    consistent with the un-adjusted 52-week high/low and current price
+    elsewhere in this file — yfinance's default dividend-adjustment can
+    otherwise shrink recent historical highs just enough to come in BELOW
+    the 52-week high, which shouldn't be possible.
+    """
+    try:
+        hist = ticker_obj.history(period="max", auto_adjust=False)
+        if not hist.empty:
+            return float(hist["High"].max())
+    except Exception:
+        pass
+    return None
+
+
+def get_mean_analyst_target(ticker_obj):
+    """Fetch the mean analyst price target and the number of analysts covering the stock."""
+    try:
+        info = ticker_obj.info
+        target = info.get("targetMeanPrice")
+        num_analysts = info.get("numberOfAnalystOpinions")
+        if target:
+            return float(target), (int(num_analysts) if num_analysts else None)
+    except Exception:
+        pass
+    return None, None
+
+
+def get_bollinger_position(ticker_obj):
+    """Fetch ~3 months of daily closes and compute Bollinger Band(20, 2) position."""
+    if compute_bollinger is None:
+        return None
+    try:
+        hist = ticker_obj.history(period="3mo")
+        closes = hist["Close"].tolist()
+        return compute_bollinger(closes)
+    except Exception:
+        return None
+
+
 def format_market_cap(market_cap):
     if not market_cap:
         return "N/A"
@@ -766,6 +901,169 @@ def print_snapshot(snapshot):
     next_earnings = snapshot["next_earnings"]
     print(f"Next Earnings Date:  {next_earnings or 'N/A'}")
     print(f"{'='*60}")
+
+
+def gather_technicals(ticker_obj, fields):
+    """
+    Fetch only the technical fields actually requested (see
+    TECHNICALS_FIELD_ORDER) for one ticker. get_current_price() can raise
+    SystemExit on total failure — that's intentionally left to propagate so
+    the caller can skip this ticker and continue with the rest, matching the
+    full-scan mode's per-ticker resilience.
+    """
+    data = {}
+
+    if "price" in fields:
+        data["price"] = get_current_price(ticker_obj)
+
+    if "52w-range" in fields:
+        data["week52_high"], data["week52_low"] = get_52week_range(ticker_obj)
+
+    if "analyst-target" in fields:
+        data["analyst_target"], data["num_analysts"] = get_mean_analyst_target(ticker_obj)
+
+    if "ath" in fields:
+        data["ath"] = get_all_time_high(ticker_obj)
+
+    if "market-cap" in fields:
+        data["market_cap"] = get_market_cap(ticker_obj)
+
+    if "rsi" in fields:
+        data["rsi"] = get_current_rsi(ticker_obj)
+
+    if "bollinger" in fields:
+        data["bollinger"] = get_bollinger_position(ticker_obj)
+
+    return data
+
+
+def print_technicals_report(ticker, data, fields):
+    """Print one ticker's requested technicals, in TECHNICALS_FIELD_ORDER regardless of CLI order."""
+    print(f"\n{'='*60}")
+    print(f"{ticker} Technicals")
+    print(f"{'='*60}")
+
+    for key in fields:
+        label = f"{TECHNICALS_FIELD_LABELS[key]}:"
+
+        if key == "price":
+            v = data.get("price")
+            print(f"{label:<28}{f'${v:.2f}' if v is not None else 'N/A'}")
+
+        elif key == "52w-range":
+            hi, lo = data.get("week52_high"), data.get("week52_low")
+            hi_str = f"${hi:.2f}" if hi else "N/A"
+            lo_str = f"${lo:.2f}" if lo else "N/A"
+            print(f"{label:<28}{hi_str} / {lo_str}")
+
+        elif key == "analyst-target":
+            target, num_analysts = data.get("analyst_target"), data.get("num_analysts")
+            if target is None:
+                print(f"{label:<28}N/A")
+            else:
+                analysts_str = f" ({num_analysts} analysts)" if num_analysts else ""
+                print(f"{label:<28}${target:.2f}{analysts_str}")
+
+        elif key == "ath":
+            v = data.get("ath")
+            print(f"{label:<28}{f'${v:.2f}' if v is not None else 'N/A'}")
+
+        elif key == "market-cap":
+            print(f"{label:<28}{format_market_cap(data.get('market_cap'))}")
+
+        elif key == "rsi":
+            v = data.get("rsi")
+            print(f"{label:<28}{f'{v:.1f}' if v is not None else 'N/A'}")
+
+        elif key == "bollinger":
+            bb = data.get("bollinger")
+            if bb is None:
+                print(f"{label:<28}N/A")
+            else:
+                below = "Yes" if bb.percent_b < 0 else "No"
+                print(f"{label:<28}%B {bb.percent_b:.2f} ({bb.zone}) | Below lower band: {below}")
+
+    print(f"{'='*60}")
+
+
+def build_technicals_row(ticker, data, fields):
+    """
+    Format one ticker's technicals into a flat dict of column label -> string
+    value, for the consolidated end-of-run table. Multi-value fields
+    (52w-range, analyst-target, bollinger) split into separate columns so
+    the table stays one value per cell.
+    """
+    row = {"Ticker": ticker}
+
+    if "price" in fields:
+        v = data.get("price")
+        row["Price"] = f"${v:.2f}" if v is not None else "N/A"
+
+    if "52w-range" in fields:
+        hi, lo = data.get("week52_high"), data.get("week52_low")
+        row["52W High"] = f"${hi:.2f}" if hi else "N/A"
+        row["52W Low"] = f"${lo:.2f}" if lo else "N/A"
+
+    if "analyst-target" in fields:
+        target, num_analysts = data.get("analyst_target"), data.get("num_analysts")
+        row["Analyst Target"] = f"${target:.2f}" if target is not None else "N/A"
+        row["# Analysts"] = str(num_analysts) if num_analysts else "N/A"
+
+    if "ath" in fields:
+        v = data.get("ath")
+        row["ATH"] = f"${v:.2f}" if v is not None else "N/A"
+
+    if "market-cap" in fields:
+        row["Market Cap"] = format_market_cap(data.get("market_cap"))
+
+    if "rsi" in fields:
+        v = data.get("rsi")
+        row["RSI"] = f"{v:.1f}" if v is not None else "N/A"
+
+    if "bollinger" in fields:
+        bb = data.get("bollinger")
+        row["BB %B (Zone)"] = f"{bb.percent_b:.2f} ({bb.zone})" if bb is not None else "N/A"
+        row["Below Lower Band"] = ("Yes" if bb.percent_b < 0 else "No") if bb is not None else "N/A"
+
+    return row
+
+
+def run_technicals_mode(tickers, fields):
+    """
+    --technicals: fetch and print only the requested technical fields for
+    each ticker, skipping the put-option scan entirely. A single bad/
+    delisted ticker is skipped with a warning rather than stopping the run.
+    Prints each ticker's own block, then one consolidated table across all
+    successfully-fetched tickers at the end.
+    """
+    field_labels = ", ".join(TECHNICALS_FIELD_LABELS[f] for f in fields)
+    print(f"Technicals for {len(tickers)} ticker(s): {', '.join(tickers)}")
+    print(f"Fields: {field_labels}")
+
+    table_rows = []  # [(raw_rsi_or_None, row_dict), ...]
+    for ticker in tickers:
+        tk = yf.Ticker(ticker)
+        try:
+            data = gather_technicals(tk, fields)
+        except SystemExit as e:
+            print(f"\n{ticker}: {e} — skipping this ticker.")
+            continue
+        print_technicals_report(ticker, data, fields)
+        table_rows.append((data.get("rsi"), build_technicals_row(ticker, data, fields)))
+
+    if not table_rows:
+        return
+
+    # Sort ascending by RSI when it was requested (missing RSI values sort last);
+    # otherwise keep the tickers in the order they were requested/scanned.
+    if "rsi" in fields:
+        table_rows.sort(key=lambda pair: (pair[0] is None, pair[0]))
+    rows = [row for _, row in table_rows]
+
+    print(f"\n{'='*100}")
+    print("ALL TICKERS — TECHNICALS SUMMARY" + (" (sorted by RSI, ascending)" if "rsi" in fields else ""))
+    print(f"{'='*100}")
+    print(pd.DataFrame(rows).to_string(index=False))
 
 
 def process_ticker(ticker, args):
@@ -1067,6 +1365,11 @@ def main():
 
     if not tickers:
         sys.exit("No valid tickers provided.")
+
+    if args.technicals is not None:
+        fields = parse_technicals_fields(args.technicals)
+        run_technicals_mode(tickers, fields)
+        return
 
     if args.strike is None and args.pct_low >= args.pct_high:
         sys.exit(f"--pct-low ({args.pct_low}) must be less than --pct-high ({args.pct_high}).")
