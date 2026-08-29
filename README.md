@@ -182,27 +182,48 @@ python stock_options_toolkit.py --ticker QQQ,AAPL,MSFT
 python stock_options_toolkit.py -t QQQ --min-days 30 --max-days 90
 python stock_options_toolkit.py -t QQQ --strike 580
 python stock_options_toolkit.py -t QQQ --pct-low 50 --pct-high 90
+python stock_options_toolkit.py -t AAPL MSFT --strike-bollinger-lower
+python stock_options_toolkit.py -t AAPL --strike-bollinger-lower --bollinger-period 10 --bollinger-std 1.5
 ```
 
 If `-t/--ticker` is omitted, it scans a persisted default watchlist stored
 in `watchlist.json` (seeded on first run with SPCX, MU, SNDK, ALAB, NVDA,
 SKHY, META, TSLA, QQQ). Manage that list without running a scan via
 `--add-ticker`, `--remove-ticker`, and `--list-tickers`. Run with `-h` for
-the full option list (`--min-days`, `--max-days`, `--strike`, `--pct-low`,
-`--pct-high`, `--output`, `--no-plot`, `--top`, `--no-fallback`,
-`--no-margin`, `--margin-shock-pct`, `--margin-floor`, `--margin-floor-pct`).
+the full option list (`--min-days`, `--max-days`, `--strike`,
+`--strike-bollinger-lower`, `--bollinger-period`, `--bollinger-std`,
+`--pct-low`, `--pct-high`, `--output`, `--no-plot`, `--top`,
+`--no-fallback`, `--no-margin`, `--margin-shock-pct`, `--margin-floor`,
+`--margin-floor-pct`).
+
+**Choosing which strikes to scan** — three mutually exclusive modes:
+
+- **Band mode (default)** — every strike between `--pct-low`/`--pct-high`
+  percent of the current price (default 30%-100%, i.e. below-spot OTM/ATM
+  puts).
+- **`--strike`** — one fixed dollar strike, applied to every ticker given,
+  each snapped to its own nearest actually-listed strike per expiration.
+- **`--strike-bollinger-lower`** — like `--strike`, but the target strike
+  is computed **per ticker** instead of one fixed value shared by all of
+  them: each ticker's own Bollinger Band lower band (default 20-day,
+  2 std — same defaults as `--technicals`' `bollinger` field; override
+  with `--bollinger-period`/`--bollinger-std`), snapped to the nearest
+  listed strike per expiration. A ticker with too little price history to
+  compute the band is skipped with a warning rather than stopping the run.
+
 Saves a per-ticker CSV/chart plus a combined CSV and chart across all
-tickers scanned. Per-ticker chart type depends on the scan: single-strike
-mode plots annualized return vs. expiration; band mode with 2+ tickers
-plots a strike x expiration heatmap. **Band mode with exactly one
-ticker** is a special case: it plots actual bid premium ($) vs. actual
-strike price ($) instead, one line per expiration — hovering a point
-shows its expiration date, strike, and bid/ask (interactive hover needs
-`mplcursors` and a live matplotlib window; has no effect on the saved
-PNG). That chart also pops up interactively when it's done (like the
-combined chart does for multi-ticker runs), and the redundant
-combined-across-tickers chart is skipped in this single-ticker case
-since it would just duplicate the same data on different axes.
+tickers scanned. Per-ticker chart type depends on the scan: `--strike` and
+`--strike-bollinger-lower` (single-strike mode) plot annualized return vs.
+expiration; band mode with 2+ tickers plots a strike x expiration heatmap.
+**Band mode with exactly one ticker** is a special case: it plots actual
+bid premium ($) vs. actual strike price ($) instead, one line per
+expiration — hovering a point shows its expiration date, strike, and
+bid/ask (interactive hover needs `mplcursors` and a live matplotlib
+window; has no effect on the saved PNG). **Whenever only one ticker is
+scanned** (any strike mode), that ticker's chart pops up interactively
+when it's done, instead of just saving silently — and the separate
+combined-across-tickers chart is skipped in that case, since it would
+just duplicate the same one ticker's data on different axes.
 
 **Technicals-only mode (`--technicals`)** skips the put-option scan entirely
 and just reports technicals for the requested ticker(s):

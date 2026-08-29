@@ -71,6 +71,8 @@ Run:
     python stock_options_toolkit.py --technicals fibonacci -t AAPL
     python stock_options_toolkit.py --universe SPY --top 20
     python stock_options_toolkit.py --universe XLK --technicals rsi
+    python stock_options_toolkit.py -t AAPL MSFT --strike-bollinger-lower
+    python stock_options_toolkit.py -t AAPL --strike-bollinger-lower --bollinger-period 10 --bollinger-std 1.5
 
 Options:
     -t, --ticker     One or more stock/ETF ticker symbols. Accepts
@@ -194,6 +196,15 @@ What it does, per ticker (normal scan mode):
            and less than the current price (below-spot, OTM/ATM puts).
        (b) SINGLE-STRIKE MODE (--strike given): uses one specific strike,
            snapped to the nearest listed strike per expiration.
+       (c) SINGLE-STRIKE MODE, BOLLINGER-DERIVED (--strike-bollinger-lower
+           given): same as (b), except the target strike is computed PER
+           TICKER as that ticker's own Bollinger Band(--bollinger-period,
+           --bollinger-std) lower band (default 20-day, 2 std — same
+           defaults as --technicals' bollinger field), instead of one
+           fixed value shared across every ticker. Mutually exclusive
+           with --strike. A ticker with too little price history to
+           compute the band is skipped with a warning, same as a bad
+           ticker symbol.
     3. Pulls every listed expiration with days-to-expiration in
        [--min-days, --max-days].
     4. For each expiration, pulls the put chain and keeps either every
@@ -640,7 +651,19 @@ def parse_args():
     parser.add_argument("--strike", type=float, default=None,
                          help="Look at one specific strike price across all expirations "
                               "(snapped to the nearest listed strike per expiration), instead "
-                              "of scanning a band of strikes. Overrides --pct-low/--pct-high.")
+                              "of scanning a band of strikes. Overrides --pct-low/--pct-high. "
+                              "Mutually exclusive with --strike-bollinger-lower.")
+    parser.add_argument("--strike-bollinger-lower", action="store_true",
+                         help="Like --strike, but the target strike is computed PER TICKER as "
+                              "that ticker's own Bollinger Band lower band (see --bollinger-period/"
+                              "--bollinger-std), instead of one fixed value for every ticker. "
+                              "Mutually exclusive with --strike.")
+    parser.add_argument("--bollinger-period", type=int, default=20,
+                         help="Lookback period (in trading days) for --strike-bollinger-lower's "
+                              "Bollinger Band calculation (default: 20).")
+    parser.add_argument("--bollinger-std", type=float, default=2.0,
+                         help="Number of standard deviations for --strike-bollinger-lower's "
+                              "Bollinger Band calculation (default: 2.0).")
     parser.add_argument("--pct-low", type=float, default=30.0,
                          help="Lower bound of strike band, as %% of current price (default: 30)")
     parser.add_argument("--pct-high", type=float, default=100.0,
@@ -1123,14 +1146,26 @@ def get_mean_analyst_target(ticker_obj):
     return None, None
 
 
-def get_bollinger_position(ticker_obj):
-    """Fetch ~3 months of daily closes and compute Bollinger Band(20, 2) position."""
+def get_bollinger_position(ticker_obj, period=20, num_std=2.0):
+    """
+    Fetch ~3 months of daily closes and compute Bollinger Band position.
+    Defaults (20, 2.0) match --technicals' bollinger field; the
+    --strike-bollinger-lower flow overrides these via --bollinger-period/
+    --bollinger-std.
+
+    Drops NaN closes before computing — the most recent row can be NaN
+    while today's session is still in progress (no close printed yet),
+    and compute_bollinger's window is a plain slice with no NaN handling
+    of its own (it expects clean input; this is the "fetching is a
+    separate concern" half of that contract), so an unfiltered NaN would
+    silently propagate into every band value instead of raising.
+    """
     if compute_bollinger is None:
         return None
     try:
         hist = ticker_obj.history(period="3mo")
-        closes = hist["Close"].tolist()
-        return compute_bollinger(closes)
+        closes = hist["Close"].dropna().tolist()
+        return compute_bollinger(closes, period=period, num_std=num_std)
     except Exception:
         return None
 
@@ -1495,7 +1530,7 @@ def process_ticker(ticker, args, single_ticker_run=False):
     """
     min_days_ahead = args.min_days
     max_days_ahead = args.max_days
-    single_strike_mode = args.strike is not None
+    single_strike_mode = args.strike is not None or args.strike_bollinger_lower
 
     print(f"\nFetching {ticker} current price and option expirations...")
     tk = yf.Ticker(ticker)
@@ -1505,8 +1540,21 @@ def process_ticker(ticker, args, single_ticker_run=False):
         print(f"  {ticker}: {e} — skipping this ticker.")
         return None, None
 
+    target_strike = None
     if single_strike_mode:
-        print(f"Current {ticker} price: ${current_price:.2f}  |  target strike: {args.strike:g}")
+        if args.strike_bollinger_lower:
+            bb = get_bollinger_position(tk, period=args.bollinger_period, num_std=args.bollinger_std)
+            if bb is None or pd.isna(bb.lower_band):
+                print(f"  {ticker}: not enough price history to compute a "
+                      f"{args.bollinger_period}-day Bollinger Band — skipping.")
+                return None, None
+            target_strike = bb.lower_band
+            print(f"Current {ticker} price: ${current_price:.2f}  |  "
+                  f"Bollinger({args.bollinger_period}, {args.bollinger_std:g}) lower band: "
+                  f"${target_strike:.2f}  |  using as target strike")
+        else:
+            target_strike = args.strike
+            print(f"Current {ticker} price: ${current_price:.2f}  |  target strike: {target_strike:g}")
     else:
         price_low = current_price * args.pct_low / 100
         price_high = current_price * args.pct_high / 100
@@ -1543,12 +1591,12 @@ def process_ticker(ticker, args, single_ticker_run=False):
             continue
 
         if single_strike_mode:
-            row, exact = find_nearest_put_row(puts, args.strike)
+            row, exact = find_nearest_put_row(puts, target_strike)
             if row is None:
                 print(f"  {exp}: no put data available")
                 continue
             rows_to_process = [row]
-            note = "" if exact else f" [nearest strike to {args.strike:g}]"
+            note = "" if exact else f" [nearest strike to {target_strike:g}]"
         else:
             band = puts[(puts["strike"] > price_low) & (puts["strike"] < price_high)]
             if band.empty:
@@ -1649,7 +1697,7 @@ def process_ticker(ticker, args, single_ticker_run=False):
     df = df.sort_values(["expiration", "strike"]).reset_index(drop=True)
 
     if single_strike_mode:
-        out_csv = f"{ticker}_{args.strike:g}_put_annualized_returns.csv"
+        out_csv = f"{ticker}_{target_strike:g}_put_annualized_returns.csv"
     else:
         out_csv = f"{ticker}_put_annualized_returns.csv"
     df.to_csv(out_csv, index=False)
@@ -1732,8 +1780,9 @@ def process_ticker(ticker, args, single_ticker_run=False):
                 ax.grid(True, alpha=0.3)
                 ax.legend()
 
-            fig.suptitle(f"{ticker} {args.strike:g} Strike Put — Annualized Return by Expiration "
-                         f"(Current price: ${current_price:.2f})")
+            strike_source = " (Bollinger lower band)" if args.strike_bollinger_lower else ""
+            fig.suptitle(f"{ticker} {target_strike:g} Strike Put{strike_source} — Annualized Return "
+                         f"by Expiration (Current price: ${current_price:.2f})")
             plt.tight_layout()
         elif single_ticker_run:
             # Only one ticker in this whole scan (band mode): plot the actual bid
@@ -1808,12 +1857,14 @@ def process_ticker(ticker, args, single_ticker_run=False):
 
         plt.savefig(out_png, dpi=150)
         print(f"Saved chart to {out_png}")
-        if single_ticker_run and not single_strike_mode:
+        if single_ticker_run:
             # Only one ticker in the whole scan and nothing else left to plot
             # afterward (the redundant combined-across-tickers chart is skipped
             # in this case — see main()) — pop up this chart interactively
             # instead of just saving it silently, same as the combined chart
-            # does at the end of a multi-ticker run.
+            # does at the end of a multi-ticker run. Applies to both the
+            # single-strike-mode line chart and the band-mode premium-vs-
+            # strike chart (single_ticker_run never reaches the heatmap branch).
             plt.show()
         plt.close(fig)
 
@@ -1849,7 +1900,11 @@ def main():
         run_technicals_mode(tickers, fields)
         return
 
-    if args.strike is None and args.pct_low >= args.pct_high:
+    if args.strike is not None and args.strike_bollinger_lower:
+        sys.exit("--strike and --strike-bollinger-lower are mutually exclusive — pick one "
+                  "target-strike source.")
+
+    if args.strike is None and not args.strike_bollinger_lower and args.pct_low >= args.pct_high:
         sys.exit(f"--pct-low ({args.pct_low}) must be less than --pct-high ({args.pct_high}).")
 
     if args.min_days > args.max_days:
@@ -1924,11 +1979,10 @@ def main():
     if not args.no_plot and len(tickers) == 1:
         # This "combined across all tickers" chart (moneyness % vs. annualized
         # return %) is redundant with the single ticker's own per-ticker chart
-        # from process_ticker() — which, in band mode, is the actual-premium-
-        # vs-actual-strike chart with per-point expiration hover — so skip it
-        # rather than saving a second, differently-axised chart for one ticker.
-        print("\nOnly one ticker was scanned — skipping the combined-across-tickers "
-              "plot (see that ticker's own chart above).")
+        # from process_ticker() (already popped up interactively there) — so
+        # skip it silently rather than saving a second, differently-axised
+        # chart for one ticker.
+        pass
     elif not args.no_plot:
         try:
             import matplotlib.pyplot as plt
